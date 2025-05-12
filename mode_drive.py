@@ -87,7 +87,8 @@ class Drive:
     
     def __get_persptrans_matrix(self):
         """
-        cv2.warpPerspective() 함수에 사용할 Perspective Transform Matrix를 반환하는 함수.\n
+        cv2.warpPerspective() 함수에 사용할 Perspective Transform Matrix를 반환하는 함수
+        아래와 같이 마름모 모양의 영역을 직사각형으로 펼치는 데에 쓰이는 Matrix이다.
         이를 통해 도로의 항공뷰를 만들 수 있다.
         ```
              * <-소실점!
@@ -96,20 +97,19 @@ class Drive:
         /         \   ->  |        |
         -----------       ----------
         ```
-        Perspective Transform Matrix는 위와 같이 마름모 모양의 영역을 직사각형으로 펼치는 데에 쓰이는 Matrix이다.\n
         이때 좌표는 왼쪽에서 오른쪽으로 가면 x값 증가, 위에서 아래로 내려가면 y값이 증가한다.
-        이때 마름모의 왼쪽 위의 좌표부터 순서대로 아래와 같다.\n
-        (f_{소실점-왼쪽 아래 좌표 직선}(_road_margin_y),_road_margin_y), (f_{소실점-오른쪽 아래 좌표 직선}(_road_margin_y),_road_margin_y)\n
-        (0 - _road_margin_x, _camera_hight), (_camera_width + _road_margin_x, _camera_hight)\n
+        이때 마름모의 왼쪽 위의 좌표부터 순서대로 아래와 같다.
+        (f_{소실점-왼쪽 아래 좌표 직선}(_road_margin_y),_road_margin_y), 
+        (f_{소실점-오른쪽 아래 좌표 직선}(_road_margin_y),_road_margin_y)
+        (0 - _road_margin_x, _camera_hight), 
+        (_camera_width + _road_margin_x, _camera_hight)
+        
 
-
-        Returns:
-            Any: Perspective Transform Matrix
-        """
-
-        # 이미지에서 도로의 소실점 y값. 이때 y값은 아래로 가면서 증가한다.
-        road_vanish_y = 240
+                                            
+        road_vanish_y = 240                                # 이미지에서 도로의 소실점 y값.
+        
         # 아래는 _get_persptrans_matrix 함수의 설명 참고.
+        
         road_margin_x = 64
         road_margin_y = 280  # 소실점보다 아래에 있는 적당한 y값
 
