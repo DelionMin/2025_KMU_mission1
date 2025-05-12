@@ -5,11 +5,11 @@ import signal
 import numpy as np
 import cv2
 from math import inf
-
+ 
 # 이 코드(class)는 step함수에서 다음과 같이 동작한다.
 # 1. 이미지(카메라 데이터)와 class 내의 state를 기반으로 차선의 위치를 알아낸다.
 #   1.1. 이미지를 항공뷰로 변환한다.
-# 2. 차선의 위치를 기반으로 position을 구한다.
+# 2. 차선의 위치를 기반으로 position을 구한다. 
 # 3. p제어를 하여 앞바퀴의 각도를 반환한다. 속도는 임의로 설정한다.
 
 
