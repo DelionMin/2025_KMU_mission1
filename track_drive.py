@@ -116,25 +116,29 @@ def start():
     # 루프 전 프레임 관련 설정 
     #=========================================
 
-    # Missions
-    mission_mapping = {
-        MissionType.IDLE: None,
-        MissionType.DRIVE: Drive(image, ranges),
-        MissionType.RUBBERCONE: Rubbercone(image, ranges),
-        MissionType.BYPASS: Bypass(image, ranges),
-    }
-
-    # Drive 클래스 내 __init__ 에 
-    # self._image = image
-    # self._ranges = ranges
-    # 넣어서 으쌰으쌰 하기
-
     detector = Detector()
     # 미션 탐지 Detector 클래스 Instantiation 
 
     #=========================================
     # 메인 루프 
     #=========================================
+
+            # Missions
+    mission_mapping = {
+        MissionType.IDLE: None,
+        MissionType.DRIVE: Drive(),
+        # MissionType.RUBBERCONE: Rubbercone(),
+        # MissionType.BYPASS: Bypass(),
+    }
+
+    detected_mission_prev = None
+    # 미션 변경 여부 체크용 
+    mission_changed = False
+    # 미션 변경 여부 flag
+
+    angle = 0
+    speed = 0
+    # IDLE state를 위한 초기화
 
     while not rospy.is_shutdown():
 
@@ -158,12 +162,22 @@ def start():
         detected_mission = detector.detect_mission(image, ranges)
         # Detector method의 detector instance의 detect_mission 메소드로 미션 탐지
 
-        mode_to_execute = mission_mapping[detected_mission]
-        # Map으로 주행 모드 결정
+        if(detected_mission != detected_mission_prev):
+            mode_to_execute = mission_mapping[detected_mission]
+            detected_mission_prev = detected_mission
+        # 탐지된 미션이 바뀔 때만 주행 클래스를 Instantiation 하기 위한 조건문
+
+
+        # DEBUGGING <CHECKING CAMERA>
+        detected_mission = MissionType.DRIVE
+        # DEBUGGING <CHECKING CAMERA>
+
 
         if mode_to_execute:
-        # mode_to_excute가 None이 아닐 시
-        # *** 재확인 필요.. if에 None 들어가도 되는지 ***
+        # mode_to_excute가 None이 아닐 시 (=IDLE state가 아닐 시)
+            
+            mode_to_execute.get_value(image, ranges)
+            # 센서 값 업데이트 
             angle, speed = mode_to_execute.step()
             # 조향각, 속도 결정
 
