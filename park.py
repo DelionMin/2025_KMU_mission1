@@ -15,6 +15,7 @@ from xycar_msgs.msg import XycarMotor
 from cv_bridge import CvBridge
 import matplotlib.pyplot as plt
 import apriltag
+import glob
 
 
 #=============================================
@@ -59,6 +60,8 @@ def drive(angle, speed):
 # 실질적인 메인 함수 
 #=============================================
 
+
+
 def start():
     global motor, image, ranges
     print("Start program --------------")
@@ -90,12 +93,14 @@ def start():
 
 
     # 초기화
-
+    angle = 0
+    speed = 5
     case = 1
     parallel = True
     distance = 1000
-    k=160
-    center_y=5000
+    tag_size=5
+    # 카메라 파라미터 (fx, fy, cx, cy)
+    camera_params = (600, 600, 320, 240)
 
     while not rospy.is_shutdown():
         if image.size == 0:
@@ -105,7 +110,9 @@ def start():
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
 
         # ✅ AprilTag 검출
+        options = apriltag.DetectorOptions(families="tag36h11")
         detections = detector.detect(gray)
+
 
         # ✅ 검출된 태그 시각화
         for det in detections:
@@ -115,51 +122,28 @@ def start():
             cx, cy = int(det.center[0]), int(det.center[1])
             cv2.putText(image, f"ID:{det.tag_id}", (cx, cy), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
             print(f"[INFO] ID: {det.tag_id}, center: {det.center}")
-            center_y=cy
+        
+
+            pose, e0,e1 = detector.detection_pose(det,camera_params,tag_size)
+
+            pose_t=pose[0:3,3]
+            pose_r=pose[0:3,0:3]
+
+            distance = np.linalg.norm(pose_t)
+
+            yaw = math.atan2(pose_r[1, 0], pose_r[0, 0])
+            yaw_deg = math.degrees(yaw)
+
+            print(f"ID: {det.tag_id}")
+            print(f"Position (x, y, z): {pose_t}")
+            print(f"Distance: {distance:.2f} m")   
+            print(f"Yaw: {yaw_deg:.2f} degrees")         
 
         # ✅ 영상 출력
         cv2.imshow("Camera View", image)
 
 
-
-
-
-        if case==1: #일반주행 모드
-            
-            angle = 0
-            speed = 10
-
-            if parallel == False: # 평행상수가 false이면
-                case=2
-
-            if center_y < k:      # 평형조건 만족 + 만약 ar과의 거리가 임계값 미만이면 주차모드
-                case=3
-            
-
-        elif case==2:             #차선 교정 모드
-
-            if distance<k:
-                case=3
-
-           # if 가로선 기울어짐
-
-          #  else 안 기울어짐
-
-        elif case==3:             #후진 모드
-            if 가로선 기울어짐
-                angle = 0
-                speed = -10
-                drive(angle, speed)
-                time.sleep(3)
-                case=1
-            #else안기울어지면
-            #drive(적당한 값)
-            #exit(0)
-
-        print(case)
-
-
-
+        
         drive(angle, speed)
 
         # Default 제어 명령, 추후에 삭제 예정인데 형식은 그대로 가져다 쓰자
