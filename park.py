@@ -16,6 +16,7 @@ from cv_bridge import CvBridge
 import matplotlib.pyplot as plt
 import apriltag
 import glob
+from scipy.spatial.transform import Rotation as R
 
 
 #=============================================
@@ -93,11 +94,13 @@ def start():
 
 
     # 초기화
-    angle = 0
+    angle = -30
     speed = 5
     case = 1
     parallel = True
     distance = 1000
+
+    #태그 크기
     tag_size=5
     # 카메라 파라미터 (fx, fy, cx, cy)
     camera_params = (600, 600, 320, 240)
@@ -106,7 +109,7 @@ def start():
         if image.size == 0:
             continue
 
-        # 흑백 변환
+        # 흑백 변환ㅈ
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
 
         # ✅ AprilTag 검출
@@ -129,15 +132,34 @@ def start():
             pose_t=pose[0:3,3]
             pose_r=pose[0:3,0:3]
 
+
+
             distance = np.linalg.norm(pose_t)
 
-            yaw = math.atan2(pose_r[1, 0], pose_r[0, 0])
-            yaw_deg = math.degrees(yaw)
+            
 
             print(f"ID: {det.tag_id}")
             print(f"Position (x, y, z): {pose_t}")
+
+            #x좌표가 커지면 오른쪽으로 이동
+            #y좌표가 커지면 위아래로 이동
+            #z좌표가 커지면 앞으로 이동
+
+
             print(f"Distance: {distance:.2f} m")   
-            print(f"Yaw: {yaw_deg:.2f} degrees")         
+
+            x_dir = pose_r @ np.array([[1], [0], [0]])
+            y_dir = pose_r @ np.array([[0], [1], [0]])
+            z_dir = pose_r @ np.array([[0], [0], [1]])
+
+            rot = R.from_matrix(pose_r)
+            euler_angles = rot.as_euler('zyx', degrees=True)  # 도 단위로 변환
+
+            # 출력 (yaw, pitch, roll)
+            _, yaw, _ = euler_angles
+
+            print(f"Y축(Yaw): {yaw:.2f}°")
+
 
         # ✅ 영상 출력
         cv2.imshow("Camera View", image)
