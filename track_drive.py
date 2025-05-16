@@ -19,8 +19,13 @@ import matplotlib.pyplot as plt
 # 커스텀 모듈 import 시작 ======================
 from detector import Detector, MissionType
 from mode_drive import Drive
+
 # from mode_rubbercone import Rubbercone
+# 완성 후 각주 해제 예정
+
 # from mode_bypass import Bypass
+# 완성 후 각주 해제 예정.. 이긴 한데 이게 필요할까?
+# 
 
 # 커스텀 모듈 import 끝   ======================
 
@@ -123,7 +128,7 @@ def start():
     # 메인 루프 
     #=========================================
 
-            # Missions
+    # Missions
     mission_mapping = {
         MissionType.IDLE: None,
         MissionType.DRIVE: Drive(),
@@ -139,6 +144,12 @@ def start():
     angle = 0
     speed = 0
     # IDLE state를 위한 초기화
+
+    # DEBUGGING <Handling idle state>
+    # time_init = time.time()
+    # DEBUGGING <Handling idle state>
+    # => IDLE state에 하드코딩 5초 직진 구현할려고 잠깐 만든 부분, 각주 없애고 써
+
 
     while not rospy.is_shutdown():
 
@@ -162,16 +173,26 @@ def start():
         detected_mission = detector.detect_mission(image, ranges)
         # Detector method의 detector instance의 detect_mission 메소드로 미션 탐지
 
+        '''
+        < 추후 개선 플랜 >
+        IDLE state에서 DRIVE state로 천이된 다음 밑에 체커 무늬 제껴야 하니까
+        5초 직진 우선 때린 다음에 차선 무는 걸로 하자
+        '''
+
         if(detected_mission != detected_mission_prev):
             mode_to_execute = mission_mapping[detected_mission]
             detected_mission_prev = detected_mission
         # 탐지된 미션이 바뀔 때만 주행 클래스를 Instantiation 하기 위한 조건문
 
 
-        # DEBUGGING <CHECKING CAMERA>
-        detected_mission = MissionType.DRIVE
-        # DEBUGGING <CHECKING CAMERA>
-
+        # DEBUGGING <Handling idle state>
+        if (time.time() - time_init < 20):
+            angle = 0
+            speed = 10
+        else:                     
+            mode_to_execute = mission_mapping[MissionType.DRIVE]
+        # DEBUGGING <Handling idle state>
+        # => IDLE state에 하드코딩 5초 직진 구현할려고 잠깐 만든 부분, 각주 없애고 써
 
         if mode_to_execute:
         # mode_to_excute가 None이 아닐 시 (=IDLE state가 아닐 시)
@@ -180,6 +201,7 @@ def start():
             # 센서 값 업데이트 
             angle, speed = mode_to_execute.step()
             # 조향각, 속도 결정
+
 
         drive(angle, speed)
         # 조향각, 속도로 실제 주행 수행
