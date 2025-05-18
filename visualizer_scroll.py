@@ -6,21 +6,17 @@ def bezier(t, P0, P1, P2, P3):
     return (1 - t)**3 * P0 + 3*(1 - t)**2 * t * P1 + 3*(1 - t) * t**2 * P2 + t**3 * P3
 
 class DraggableControlPoints:
-    def __init__(self, ax, P0, P3, theta0_rad, theta1_rad, d0_init, d1_init):
+    def __init__(self, ax, P0, P3, theta0_rad, d0_init, d1_init):
         self.ax = ax
         self.P0 = P0
         self.P3 = P3
         self.theta0 = theta0_rad
-        self.theta1 = theta1_rad
+        self.theta1 = np.pi / 2  # y축 방향 고정 (90도)
 
         self.d0 = d0_init
         self.d1 = d1_init
 
-        self.dir0 = np.array([np.cos(self.theta0), np.sin(self.theta0)])
-        self.dir1 = np.array([np.cos(self.theta1), np.sin(self.theta1)])
-
-        self.P1 = self.P0 + self.d0 * self.dir0
-        self.P2 = self.P3 + self.d1 * self.dir1
+        self.update_dirs_and_points()
 
         self.dragging_point = None
 
@@ -48,11 +44,19 @@ class DraggableControlPoints:
         self.cid_release = ax.figure.canvas.mpl_connect('button_release_event', self.on_release)
         self.cid_motion = ax.figure.canvas.mpl_connect('motion_notify_event', self.on_motion)
 
+    def update_dirs_and_points(self):
+        self.dir0 = np.array([np.cos(self.theta0), np.sin(self.theta0)])
+        self.dir1 = np.array([np.cos(self.theta1), np.sin(self.theta1)])
+
+        self.P1 = self.P0 + self.d0 * self.dir0
+        self.P2 = self.P3 + self.d1 * self.dir1
+
     def update_curve(self):
         curve_points = np.array([bezier(t, self.P0, self.P1, self.P2, self.P3) for t in self.ts])
         self.curve.set_data(curve_points[:,0], curve_points[:,1])
         self.points.set_offsets([self.P0, self.P1, self.P2, self.P3])
 
+        self.labels[0].set_position((self.P0[0], self.P0[1]))
         self.labels[1].set_position((self.P1[0], self.P1[1]))
         self.labels[2].set_position((self.P2[0], self.P2[1]))
 
@@ -88,9 +92,7 @@ class DraggableControlPoints:
         mouse_xy = np.array([event.xdata, event.ydata])
 
         if self.dragging_point == 'P1':
-            # 시작점 기준 벡터
             vec = mouse_xy - self.P0
-            # dir0 단위벡터와 벡터의 내적으로 거리값 추출 (음수 포함)
             proj_length = np.dot(vec, self.dir0)
             self.d0 = proj_length
             self.P1 = self.P0 + self.d0 * self.dir0
@@ -116,23 +118,27 @@ class DraggableControlPoints:
         self.P2 = self.P3 + self.d1 * self.dir1
         self.update_curve()
 
-def plot_bezier_interactive(P0, P3, theta0_deg, angle_diff_deg, d0=3, d1=3):
+    def update_theta0(self, val):
+        self.theta0 = np.deg2rad(val)
+        self.update_dirs_and_points()
+        self.update_curve()
+
+def plot_bezier_interactive(P0, P3, theta0_deg, d0=3, d1=3):
     P0 = np.array(P0)
     P3 = np.array(P3)
-    theta0 = np.deg2rad(theta0_deg)
-    theta1 = theta0 + np.deg2rad(angle_diff_deg)
 
     fig, ax = plt.subplots(figsize=(8,6))
-    plt.subplots_adjust(left=0.1, bottom=0.25)
+    plt.subplots_adjust(left=0.1, bottom=0.35)
 
-    ax.set_title(f'Bezier Curve with Fixed Tangents\nStart angle: {theta0_deg}°, Angle diff: {angle_diff_deg}°')
+    ax.set_title(f'Bezier Curve with Fixed End Angle (90°) and Adjustable Start Angle')
     ax.axis('equal')
     ax.grid(True)
 
-    draggable = DraggableControlPoints(ax, P0, P3, theta0, theta1, d0, d1)
+    draggable = DraggableControlPoints(ax, P0, P3, np.deg2rad(theta0_deg), d0, d1)
 
-    ax_d0 = plt.axes([0.1, 0.1, 0.8, 0.03])
-    ax_d1 = plt.axes([0.1, 0.15, 0.8, 0.03])
+    # 거리 슬라이더
+    ax_d0 = plt.axes([0.1, 0.25, 0.8, 0.03])
+    ax_d1 = plt.axes([0.1, 0.20, 0.8, 0.03])
 
     slider_d0 = Slider(ax_d0, 'Distance d0', -20.0, 20.0, valinit=d0)
     slider_d1 = Slider(ax_d1, 'Distance d1', -20.0, 20.0, valinit=d1)
@@ -140,8 +146,30 @@ def plot_bezier_interactive(P0, P3, theta0_deg, angle_diff_deg, d0=3, d1=3):
     slider_d0.on_changed(draggable.update_d0)
     slider_d1.on_changed(draggable.update_d1)
 
+    # 시작점 각도 슬라이더
+    ax_theta0 = plt.axes([0.1, 0.10, 0.8, 0.03])
+    slider_theta0 = Slider(ax_theta0, 'Start Angle θ₀ (deg)', -180, 180, valinit=theta0_deg)
+    slider_theta0.on_changed(draggable.update_theta0)
+
+    # 시작점 위치 조정 슬라이더 (X, Y)
+    ax_P0x = plt.axes([0.1, 0.05, 0.35, 0.03])
+    ax_P0y = plt.axes([0.55, 0.05, 0.35, 0.03])
+
+    slider_P0x = Slider(ax_P0x, 'P0 X', -20.0, 20.0, valinit=P0[0])
+    slider_P0y = Slider(ax_P0y, 'P0 Y', -20.0, 20.0, valinit=P0[1])
+
+    def update_P0(val):
+        x = slider_P0x.val
+        y = slider_P0y.val
+        draggable.P0 = np.array([x, y])
+        draggable.update_dirs_and_points()
+        draggable.update_curve()
+
+    slider_P0x.on_changed(update_P0)
+    slider_P0y.on_changed(update_P0)
+
     plt.legend()
     plt.show()
 
 if __name__ == "__main__":
-    plot_bezier_interactive(P0=[0,0], P3=[10,5], theta0_deg=45, angle_diff_deg=50)
+    plot_bezier_interactive(P0=[-5, -5], P3=[0, 0], theta0_deg=60)
