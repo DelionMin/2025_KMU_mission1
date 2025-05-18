@@ -127,7 +127,7 @@ def plot_bezier_interactive(P0, P3, theta0_deg, d0=3, d1=3):
     P0 = np.array(P0)
     P3 = np.array(P3)
 
-    fig, ax = plt.subplots(figsize=(8,6))
+    fig, ax = plt.subplots(figsize=(16,12))
     plt.subplots_adjust(left=0.1, bottom=0.35)
 
     ax.set_title(f'Bezier Curve with Fixed End Angle (90°) and Adjustable Start Angle')
@@ -136,20 +136,22 @@ def plot_bezier_interactive(P0, P3, theta0_deg, d0=3, d1=3):
 
     draggable = DraggableControlPoints(ax, P0, P3, np.deg2rad(theta0_deg), d0, d1)
 
-    # 거리 슬라이더
+    
+    # d0 Distance 슬라이더 위치를 0.25로 (세번째 슬라이더 위치로 변경)
     ax_d0 = plt.axes([0.1, 0.25, 0.8, 0.03])
-    ax_d1 = plt.axes([0.1, 0.20, 0.8, 0.03])
-
-    slider_d0 = Slider(ax_d0, 'Distance d0', -20.0, 20.0, valinit=d0)
-    slider_d1 = Slider(ax_d1, 'Distance d1', -20.0, 20.0, valinit=d1)
-
+    slider_d0 = Slider(ax_d0, 'd1 Distance', -20.0, 20.0, valinit=d0)
     slider_d0.on_changed(draggable.update_d0)
+
+    # 각도 슬라이더 그대로
+    ax_theta0 = plt.axes([0.1, 0.20, 0.8, 0.03])
+    slider_theta0 = Slider(ax_theta0, 'd1 Angle (yaw)', -180, 180, valinit=theta0_deg)
+    slider_theta0.on_changed(draggable.update_theta0)
+
+    # d1 Distance 슬라이더 위치를 0.15로 (첫번째 슬라이더 위치로 변경)
+    ax_d1 = plt.axes([0.1, 0.15, 0.8, 0.03])
+    slider_d1 = Slider(ax_d1, 'd2 Distance', -20.0, 20.0, valinit=d1)
     slider_d1.on_changed(draggable.update_d1)
 
-    # 시작점 각도 슬라이더
-    ax_theta0 = plt.axes([0.1, 0.10, 0.8, 0.03])
-    slider_theta0 = Slider(ax_theta0, 'Start Angle θ₀ (deg)', -180, 180, valinit=theta0_deg)
-    slider_theta0.on_changed(draggable.update_theta0)
 
     # 시작점 위치 조정 슬라이더 (X, Y)
     ax_P0x = plt.axes([0.1, 0.05, 0.35, 0.03])
