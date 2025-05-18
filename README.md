@@ -1,7 +1,9 @@
 라이브러리 설치
+
 pip install numpy matplotlib
 
 visualizer.py 은 메소드 내부에 각도와 좌표를 지정하여 베지에 곡선을 그리는 방식이다.
+
 visualizer_scroll.py 은 이를 개선하여 스크롤로 좌표들을 조정할 수 있게 만든 버전이다.
 
 ✅ 1. 시작점과 끝점의 방향(각도) 고정 및 조정 가능
