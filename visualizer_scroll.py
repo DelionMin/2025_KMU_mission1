@@ -2,57 +2,91 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.widgets import Slider
 
-def bezier(t, P0, P1, P2, P3):
+def bezier(t, P0, P1, P2, P3): # 베지에 곡선 리턴 함수
     return (1 - t)**3 * P0 + 3*(1 - t)**2 * t * P1 + 3*(1 - t) * t**2 * P2 + t**3 * P3
 
 class DraggableControlPoints:
-    def __init__(self, ax, P0, P3, theta0_rad, d0_init, d1_init):
-        self.ax = ax
-        self.P0 = P0
-        self.P3 = P3
-        self.theta0 = theta0_rad
-        self.theta1 = np.pi / 2  # y축 방향 고정 (90도)
+    def __init__(self, ax, P0, P3, theta0_rad, d0_init, d1_init): #상수들 초기화
 
-        self.d0 = d0_init
-        self.d1 = d1_init
+        self.ax = ax              # 그래프 축 객체
+        self.P0 = P0              # 시작점 좌표
+        self.P3 = P3              #끝점 좌표
+        self.theta0 = theta0_rad  # 시작점의 방향 각도
+        self.theta1 = np.pi / 2   # y축 방향 고정 (90도)
 
-        self.update_dirs_and_points()
 
-        self.dragging_point = None
+        self.d0 = d0_init         # 시작점 → P1 거리
+        self.d1 = d1_init         # 끝점 → P2 거리
 
-        self.ts = np.linspace(0,1,100)
 
+        self.update_dirs_and_points()   # 제어점 위치 업데이트 실행
+
+        self.dragging_point = None      # 현재 드래그 중인 점
+
+        self.ts = np.linspace(0,1,100)  # 0~1 사이의 숫자를 100등분한 배열
+
+
+        # 그래프 곡선 객체 / plot 함수는 리스트를 반환하므로 ,을 붙여 unpacking 하였음
         self.curve, = ax.plot([], [], 'b-', label='Bezier Curve')
+
+        # 4개의 점을 찍는 코드 / x좌표 4개, y좌표 4개, 색상 4개
+        # s는 점의 크기, picker은 클릭 가능한 크기
         self.points = ax.scatter([self.P0[0], self.P1[0], self.P2[0], self.P3[0]],
                                 [self.P0[1], self.P1[1], self.P2[1], self.P3[1]],
                                 c=['green','red','red','magenta'], s=100, picker=5)
 
+        # 점들에 라벨을 붙이는 코드
         self.labels = []
+
+        # 시작점
+        # x좌표, y좌표, 라벨 내용, 글씨 크기, 색상
         self.labels.append(ax.text(self.P0[0], self.P0[1], 'P0(Start)', fontsize=9, color='green'))
+
+        # P1 제어점
         self.labels.append(ax.text(self.P1[0], self.P1[1], 'P1(Control)', fontsize=9, color='red'))
+
+        # P2 제어점
         self.labels.append(ax.text(self.P2[0], self.P2[1], 'P2(Control)', fontsize=9, color='red'))
+
+        # 종료점
         self.labels.append(ax.text(self.P3[0], self.P3[1], 'P3(End)', fontsize=9, color='magenta'))
 
+        # P0 점의 방향 벡터 화살표를 그림
+        # x좌표, y좌표, x증분, y증분, 색상, 머리 너비, true는 길이에 머리도 포함
         self.arr0 = ax.arrow(self.P0[0], self.P0[1], self.dir0[0], self.dir0[1],
                              color='green', head_width=0.3, length_includes_head=True)
+
+        # P3 점의 방향 벡터 화살표를 그림
         self.arr1 = ax.arrow(self.P3[0], self.P3[1], self.dir1[0], self.dir1[1],
                              color='magenta', head_width=0.3, length_includes_head=True)
 
+        # 베지에 곡선 초기값 로딩
         self.update_curve()
 
+        # 마우스 버튼을 눌렀을 때 이벤트
         self.cid_press = ax.figure.canvas.mpl_connect('button_press_event', self.on_press)
+
+        # 마우스 버튼을 뗄 있을 때 이벤트
         self.cid_release = ax.figure.canvas.mpl_connect('button_release_event', self.on_release)
+
+        # 마우스 버튼을 움직일 때 이벤트
         self.cid_motion = ax.figure.canvas.mpl_connect('motion_notify_event', self.on_motion)
 
-    def update_dirs_and_points(self):
+    def update_dirs_and_points(self): # 제어점 업데이트
+        # 각도를 방향벡터로 변환
         self.dir0 = np.array([np.cos(self.theta0), np.sin(self.theta0)])
         self.dir1 = np.array([np.cos(self.theta1), np.sin(self.theta1)])
 
+        # P1과 P2 좌표 계산
         self.P1 = self.P0 + self.d0 * self.dir0
         self.P2 = self.P3 + self.d1 * self.dir1
 
-    def update_curve(self):
+    def update_curve(self): # 베지에 곡선 업데이트
+        
+        # 0부터 1까지 100등분 한 점에 대해 베지에 메소드를 적용해 점들을 계산
         curve_points = np.array([bezier(t, self.P0, self.P1, self.P2, self.P3) for t in self.ts])
+        
+        
         self.curve.set_data(curve_points[:,0], curve_points[:,1])
         self.points.set_offsets([self.P0, self.P1, self.P2, self.P3])
 
@@ -60,8 +94,11 @@ class DraggableControlPoints:
         self.labels[1].set_position((self.P1[0], self.P1[1]))
         self.labels[2].set_position((self.P2[0], self.P2[1]))
 
+        # 기존 방향 벡터 제거
         self.arr0.remove()
         self.arr1.remove()
+
+        # 방향 벡터 업데이트
         self.arr0 = self.ax.arrow(self.P0[0], self.P0[1], self.dir0[0], self.dir0[1],
                                  color='green', head_width=0.3, length_includes_head=True)
         self.arr1 = self.ax.arrow(self.P3[0], self.P3[1], self.dir1[0], self.dir1[1],
@@ -69,8 +106,8 @@ class DraggableControlPoints:
 
         self.ax.figure.canvas.draw_idle()
 
-    def on_press(self, event):
-        if event.inaxes != self.ax:
+    def on_press(self, event):      # 드래그 시작
+        if event.inaxes != self.ax: # 
             return
 
         mouse_xy = np.array([event.xdata, event.ydata])
@@ -83,10 +120,10 @@ class DraggableControlPoints:
         elif dist_P2 < threshold:
             self.dragging_point = 'P2'
 
-    def on_motion(self, event):
-        if self.dragging_point is None:
+    def on_motion(self, event):           # 마우스 따라 값 갱신
+        if self.dragging_point is None:   # 드래그 값 없으면 탈출
             return
-        if event.inaxes != self.ax:
+        if event.inaxes != self.ax:       # 
             return
 
         mouse_xy = np.array([event.xdata, event.ydata])
@@ -105,7 +142,7 @@ class DraggableControlPoints:
 
         self.update_curve()
 
-    def on_release(self, event):
+    def on_release(self, event): # 드래그 종료
         self.dragging_point = None
 
     def update_d0(self, val):
@@ -123,7 +160,7 @@ class DraggableControlPoints:
         self.update_dirs_and_points()
         self.update_curve()
 
-def plot_bezier_interactive(P0, P3, theta0_deg, d0=3, d1=3):
+def plot_bezier_interactive(P0, P3, theta0_deg, d0=3, d1=3): # 메인 메소드
     P0 = np.array(P0)
     P3 = np.array(P3)
 
@@ -173,42 +210,5 @@ def plot_bezier_interactive(P0, P3, theta0_deg, d0=3, d1=3):
     plt.legend()
     plt.show()
 
-if __name__ == "__main__":
+if __name__ == "__main__": # 함수 실행
     plot_bezier_interactive(P0=[-5, -5], P3=[0, 0], theta0_deg=60)
-
-"""
-✅ 1. 시작점과 끝점의 방향(각도) 고정 및 조정 가능
-P0의 방향(θ₀)을 슬라이더로 실시간 조정할 수 있으며,
-
-P3의 방향은 고정되어 있어 끝점의 방향 조건이 명확한 제약 조건으로 작동합니다.
-
-이는 실제 로봇 경로 생성, 곡선 연결, 인터폴레이션 등에서 자주 필요한 제약 조건입니다.
-
-✅ 2. 거리(d₀, d₁)를 직관적으로 조절 가능
-슬라이더를 통해 제어점과의 거리(d0, d1)를 조정함으로써 곡선의 굴곡(곡률)을 실시간 제어할 수 있습니다.
-
-이 접근 방식은 곡률을 조정할 때 수치적으로 안정적이며 직관적입니다.
-
-✅ 3. 제어점 드래그 기능으로 곡선 형상 직접 수정 가능
-P1, P2 제어점을 마우스로 직접 드래그하여 위치 조절이 가능하며, 이 동작은 d0, d1을 업데이트하여 일관된 방향 벡터를 유지합니다.
-
-따라서 위치 조절과 방향 조건의 연동을 유지한 채로 직관적인 수정이 가능합니다.
-
-✅ 4. 슬라이더로 시작점 P0도 조절 가능
-P0의 위치를 슬라이더로 조정하면, 시작 각도 theta0과 거리 d0에 따라 자동으로 P1이 재계산되어, 전체 곡선의 시작점 조건을 유지하며 움직임을 시뮬레이션할 수 있습니다.
-
-✅ 5. 구현 구조가 명확하고 확장 가능
-DraggableControlPoints 클래스를 중심으로, 데이터(제어점, 각도, 거리)와 동작(업데이트, 드래그, 슬라이더 연동)이 잘 분리되어 있어:
-
-다양한 조건 제약을 추가하기 쉽고,
-
-향후 3차원 곡선이나 다중 곡선 연결 등으로 확장하기도 유리합니다.
-
-✅ 6. 시각적 피드백이 빠르고 직관적
-각 제어점의 이름, 방향 벡터(화살표), 색상 등을 다르게 설정하여 사용자가 구조를 쉽게 이해할 수 있도록 시각적 단서를 제공합니다.
-
-실시간 draw_idle()을 통해 빠른 피드백이 제공됩니다.
-
-💡 요약
-이 코드는 **곡선의 시작 조건(위치 + 방향)**과 **끝 조건(위치 + 방향)**을 유지하면서도 곡선의 형태를 다양한 방식으로 직관적이고 실시간으로 조정할 수 있게 하여, 인터랙티브한 곡선 설계 도구로 매우 유용합니다.
-"""
