@@ -10,7 +10,7 @@ class DraggableControlPoints:
 
         self.ax = ax              # 그래프 축 객체
         self.P0 = P0              # 시작점 좌표
-        self.P3 = P3              #끝점 좌표
+        self.P3 = P3              # 끝점 좌표
         self.theta0 = theta0_rad  # 시작점의 방향 각도
         self.theta1 = np.pi / 2   # y축 방향 고정 (90도)
 
@@ -86,10 +86,13 @@ class DraggableControlPoints:
         # 0부터 1까지 100등분 한 점에 대해 베지에 메소드를 적용해 점들을 계산
         curve_points = np.array([bezier(t, self.P0, self.P1, self.P2, self.P3) for t in self.ts])
         
-        
+        # 곡선의 점들의 데이터를 업데이트
         self.curve.set_data(curve_points[:,0], curve_points[:,1])
+
+        # 네개의 점들의 위치를 업데이트
         self.points.set_offsets([self.P0, self.P1, self.P2, self.P3])
 
+        # 라벨 위치 업데이트
         self.labels[0].set_position((self.P0[0], self.P0[1]))
         self.labels[1].set_position((self.P1[0], self.P1[1]))
         self.labels[2].set_position((self.P2[0], self.P2[1]))
@@ -104,90 +107,95 @@ class DraggableControlPoints:
         self.arr1 = self.ax.arrow(self.P3[0], self.P3[1], self.dir1[0], self.dir1[1],
                                  color='magenta', head_width=0.3, length_includes_head=True)
 
+
+        # 변화가 있는 경우 redraw
         self.ax.figure.canvas.draw_idle()
 
     def on_press(self, event):      # 드래그 시작
-        if event.inaxes != self.ax: # 
+        if event.inaxes != self.ax: # 스크롤바에서 발생한 이벤트가 아닐때 cancel
             return
 
-        mouse_xy = np.array([event.xdata, event.ydata])
-        dist_P1 = np.linalg.norm(mouse_xy - self.P1)
-        dist_P2 = np.linalg.norm(mouse_xy - self.P2)
-        threshold = 0.5
+        mouse_xy = np.array([event.xdata, event.ydata])  # 클릭 위치를 저장
+        dist_P1 = np.linalg.norm(mouse_xy - self.P1)     # 클릭점~ 제어점 1의 거리
+        dist_P2 = np.linalg.norm(mouse_xy - self.P2)     # 클릭점~ 제어점 2의 거리
+        threshold = 0.5                                  # drag의 threshold
 
-        if dist_P1 < threshold:
-            self.dragging_point = 'P1'
-        elif dist_P2 < threshold:
-            self.dragging_point = 'P2'
+        if dist_P1 < threshold:         # 제어점 1과의 거리가 threshold 미만이면
+            self.dragging_point = 'P1'  # p1을 그래그 포인트로 지정
+        elif dist_P2 < threshold:       # 제어점 2과의 거리가 threshold 미만이면
+            self.dragging_point = 'P2'  # p2을 그래그 포인트로 지정
 
     def on_motion(self, event):           # 마우스 따라 값 갱신
-        if self.dragging_point is None:   # 드래그 값 없으면 탈출
+        if self.dragging_point is None:   # 드래그 값 없으면 cancel
             return
-        if event.inaxes != self.ax:       # 
+        if event.inaxes != self.ax:       # 스크롤바에서 발생한 이벤트가 아닐때 cancel
             return
 
-        mouse_xy = np.array([event.xdata, event.ydata])
+        mouse_xy = np.array([event.xdata, event.ydata]) # 마우스의 위치를 저장
 
-        if self.dragging_point == 'P1':
-            vec = mouse_xy - self.P0
-            proj_length = np.dot(vec, self.dir0)
-            self.d0 = proj_length
-            self.P1 = self.P0 + self.d0 * self.dir0
+        if self.dragging_point == 'P1':             # p1을 드래그 중이라면
+            vec = mouse_xy - self.P0                # P0~ 마우스 벡터 계산
+            proj_length = np.dot(vec, self.dir0)    # dir0에 정사영
+            self.d0 = proj_length                   # 정사영한 길이로 d0 update
+            self.P1 = self.P0 + self.d0 * self.dir0 # P1 위치 update
 
-        elif self.dragging_point == 'P2':
-            vec = mouse_xy - self.P3
-            proj_length = np.dot(vec, self.dir1)
-            self.d1 = proj_length
-            self.P2 = self.P3 + self.d1 * self.dir1
+        elif self.dragging_point == 'P2':            # p1을 드래그 중이라면
+            vec = mouse_xy - self.P3                 # p3 ~ 마우스 벡터 계산
+            proj_length = np.dot(vec, self.dir1)     # dir1에 정사영
+            self.d1 = proj_length                    # 정사영한 길이로 d1 update
+            self.P2 = self.P3 + self.d1 * self.dir1  # P2 위치 update
 
-        self.update_curve()
+        self.update_curve() # 곡선 업데이트
 
     def on_release(self, event): # 드래그 종료
         self.dragging_point = None
 
-    def update_d0(self, val):
+    def update_d0(self, val): # 슬라이더로 d0 update
         self.d0 = val
         self.P1 = self.P0 + self.d0 * self.dir0
-        self.update_curve()
+        self.update_curve() # 곡선 업데이트
 
-    def update_d1(self, val):
+    def update_d1(self, val): # 슬라이더로 d1 update
         self.d1 = val
         self.P2 = self.P3 + self.d1 * self.dir1
-        self.update_curve()
+        self.update_curve() # 곡선 업데이트
 
-    def update_theta0(self, val):
+    def update_theta0(self, val): # 슬라이더로 theta update
         self.theta0 = np.deg2rad(val)
         self.update_dirs_and_points()
-        self.update_curve()
+        self.update_curve() # 곡선 업데이트
 
 def plot_bezier_interactive(P0, P3, theta0_deg, d0=3, d1=3): # 메인 메소드
-    P0 = np.array(P0)
-    P3 = np.array(P3)
+    P0 = np.array(P0)   # P0점 
+    P3 = np.array(P3)   # P3점
 
-    fig, ax = plt.subplots(figsize=(16,12))
-    plt.subplots_adjust(left=0.1, bottom=0.35)
+    fig, ax = plt.subplots(figsize=(16,12))     # 차트 생성
+    plt.subplots_adjust(left=0.1, bottom=0.35)  # 차트 레이아웃
 
+    # 제목설정
     ax.set_title(f'Bezier Curve with Fixed End Angle (90°) and Adjustable Start Angle')
-    ax.axis('equal')
-    ax.grid(True)
 
+    ax.axis('equal')    # x축 y축 scale 같게
+    ax.grid(True)       # 격자선 표시
+
+    # 위에서 정의한 클래스 객체 생성
     draggable = DraggableControlPoints(ax, P0, P3, np.deg2rad(theta0_deg), d0, d1)
 
     
-    # d0 Distance 슬라이더 위치를 0.25로 (세번째 슬라이더 위치로 변경)
-    ax_d0 = plt.axes([0.1, 0.25, 0.8, 0.03])
-    slider_d0 = Slider(ax_d0, 'd1 Distance', -20.0, 20.0, valinit=d0)
-    slider_d0.on_changed(draggable.update_d0)
+    # d1 Distance 슬라이더
+    ax_d1 = plt.axes([0.1, 0.25, 0.8, 0.03])
+    slider_d1 = Slider(ax_d1, 'd1 Distance', -20.0, 20.0, valinit=d0)
+    slider_d1.on_changed(draggable.update_d0)
 
-    # 각도 슬라이더 그대로
+    # 각도 슬라이더
     ax_theta0 = plt.axes([0.1, 0.20, 0.8, 0.03])
     slider_theta0 = Slider(ax_theta0, 'd1 Angle (yaw)', -180, 180, valinit=theta0_deg)
     slider_theta0.on_changed(draggable.update_theta0)
 
-    # d1 Distance 슬라이더 위치를 0.15로 (첫번째 슬라이더 위치로 변경)
-    ax_d1 = plt.axes([0.1, 0.15, 0.8, 0.03])
-    slider_d1 = Slider(ax_d1, 'd2 Distance', -20.0, 20.0, valinit=d1)
-    slider_d1.on_changed(draggable.update_d1)
+    # d2 Distance 슬라이더
+    ax_d2 = plt.axes([0.1, 0.15, 0.8, 0.03])
+    slider_d2 = Slider(ax_d2, 'd2 Distance', -20.0, 20.0, valinit=d1)
+    slider_d2.on_changed(draggable.update_d1)
 
 
     # 시작점 위치 조정 슬라이더 (X, Y)
@@ -197,7 +205,8 @@ def plot_bezier_interactive(P0, P3, theta0_deg, d0=3, d1=3): # 메인 메소드
     slider_P0x = Slider(ax_P0x, 'P0 X', -20.0, 20.0, valinit=P0[0])
     slider_P0y = Slider(ax_P0y, 'P0 Y', -20.0, 20.0, valinit=P0[1])
 
-    def update_P0(val):
+
+    def update_P0(val):     # 슬라이더로 p0위치 조정
         x = slider_P0x.val
         y = slider_P0y.val
         draggable.P0 = np.array([x, y])
@@ -210,5 +219,5 @@ def plot_bezier_interactive(P0, P3, theta0_deg, d0=3, d1=3): # 메인 메소드
     plt.legend()
     plt.show()
 
-if __name__ == "__main__": # 함수 실행
+if __name__ == "__main__": # main method 실행
     plot_bezier_interactive(P0=[-5, -5], P3=[0, 0], theta0_deg=60)
