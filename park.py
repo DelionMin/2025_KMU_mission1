@@ -51,7 +51,7 @@ def usbcam_callback(data):
 # 모터로 토픽을 발행하는 함수 
 #=============================================
 
-def drive(angle, speed):
+def drive(angle, speed):          # 주행 함수
     motor_msg.angle = float(angle)
     motor_msg.speed = float(speed)
     motor.publish(motor_msg)
@@ -60,7 +60,6 @@ def drive(angle, speed):
 #=============================================
 # 실질적인 메인 함수 
 #=============================================
-
 
 
 def start():
@@ -89,75 +88,91 @@ def start():
     # 메인 루프 
     #=========================================
     # ✅ Apriltag Detector 초기화
-    options = apriltag.DetectorOptions(families="tag36h11")  # 또는 "tag36h11"
+    # 감지할 태그 옵션지정 "tag36h11"
+    options = apriltag.DetectorOptions(families="tag36h11")  
+    # 태그 검출 객체 생성
     detector = apriltag.Detector(options)
 
 
     # 초기화
-    angle = -30
+    angle = 0
     speed = 5
-    case = 1
-    parallel = True
-    distance = 1000
 
     #태그 크기
     tag_size=5
-    # 카메라 파라미터 (fx, fy, cx, cy)
-    camera_params = (600, 600, 320, 240)
 
-    while not rospy.is_shutdown():
+    # 카메라 파라미터 (fx, fy, cx, cy) (초점거리 좌표 / 센서 중앙 좌표)
+    camera_params = (300, 300, 320, 240)
+
+    while not rospy.is_shutdown(): # 메인 루프
         if image.size == 0:
             continue
 
-        # 흑백 변환ㅈ
+        # 흑백 변환
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
 
         # ✅ AprilTag 검출
-        options = apriltag.DetectorOptions(families="tag36h11")
         detections = detector.detect(gray)
 
 
         # ✅ 검출된 태그 시각화
-        for det in detections:
-            corners = det.corners.astype(int)
-            for i in range(4):
+        # 감지된 태그들을 순회 / 해당 프로그램에서는 태그가 1개이므로 1번만 실행됨
+        for det in detections:                  
+            corners = det.corners.astype(int)   # 태크의 코너 좌표들을 int로 변환
+            for i in range(4):                  # 코너를 잇는 사각형 그리기
+                
+                # image 상에 n번째 점과 n+1번째 점을 잇는 선 그리기 녹색, 두께 2
                 cv2.line(image, tuple(corners[i]), tuple(corners[(i + 1) % 4]), (0, 255, 0), 2)
+
+            # 태그의 중심좌표를 반환
             cx, cy = int(det.center[0]), int(det.center[1])
-            cv2.putText(image, f"ID:{det.tag_id}", (cx, cy), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
-            print(f"[INFO] ID: {det.tag_id}, center: {det.center}")
+            # 태그의 중심 좌표를 image 상에 출력
+            cv2.putText(image, f"center:{det.center.astype(int)}", (cx, cy), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
         
 
+            # pose는 거리, 방향에 대한 행렬, e0와 e1은 오차율 관련 정보임
             pose, e0,e1 = detector.detection_pose(det,camera_params,tag_size)
 
-            pose_t=pose[0:3,3]
-            pose_r=pose[0:3,0:3]
+
+            # pose 행렬 구조  |R t|
+            #                 |0 1|
+            # pose는 4*4 행렬임
+            # R은 3*3의 회전 행렬
+            # t는 3*1 위치벡터
 
 
+            pose_t=pose[0:3,3]    # 회전 행령 데이터 슬라이스
+            pose_r=pose[0:3,0:3]  # 위치 벡터 데이터 슬라이스
 
+
+            # 거리계산 / 위치벡터의 norm을 구한것임
+            # L2 norm은 유클리드 노름으로 해당 벡터의 크기를 계산하는 것과 동치
             distance = np.linalg.norm(pose_t)
 
             
-
-            print(f"ID: {det.tag_id}")
+            # 태그의 상대위치 출력 / 원점은 자동차인 것으로 보임
             print(f"Position (x, y, z): {pose_t}")
 
             #x좌표가 커지면 오른쪽으로 이동
             #y좌표가 커지면 위아래로 이동
             #z좌표가 커지면 앞으로 이동
 
-
+            # 계산한 거리 출력
             print(f"Distance: {distance:.2f} m")   
 
             x_dir = pose_r @ np.array([[1], [0], [0]])
             y_dir = pose_r @ np.array([[0], [1], [0]])
             z_dir = pose_r @ np.array([[0], [0], [1]])
 
+
             rot = R.from_matrix(pose_r)
             euler_angles = rot.as_euler('zyx', degrees=True)  # 도 단위로 변환
 
-            # 출력 (yaw, pitch, roll)
+
+            # (yaw, pitch, roll) yaw만 필요하므로 나머지 버림
             _, yaw, _ = euler_angles
 
+            # yaw 값 출력
             print(f"Y축(Yaw): {yaw:.2f}°")
 
 
@@ -165,18 +180,18 @@ def start():
         cv2.imshow("Camera View", image)
 
 
-        
+        # 차량 제어
         drive(angle, speed)
 
         # Default 제어 명령, 추후에 삭제 예정인데 형식은 그대로 가져다 쓰자
 
 
         # ==================[ 수정 끝  ]================== 
-
+        # 0.1초 delay
         time.sleep(0.1)
 
         
-
+        # 키보드 조작
         cv2.waitKey(1)
 
 
