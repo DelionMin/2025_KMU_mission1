@@ -160,13 +160,12 @@ def start():
             # 계산한 거리 출력
             print(f"Distance: {distance:.2f} m")   
 
-            x_dir = pose_r @ np.array([[1], [0], [0]])
-            y_dir = pose_r @ np.array([[0], [1], [0]])
-            z_dir = pose_r @ np.array([[0], [0], [1]])
 
-
+            # 회전 행렬 객체 생성
             rot = R.from_matrix(pose_r)
-            euler_angles = rot.as_euler('zyx', degrees=True)  # 도 단위로 변환
+
+            # 객체에 대해 오일러 각을 z-y-x 순서로 도 단위로 반환
+            euler_angles = rot.as_euler('zyx', degrees=True)
 
 
             # (yaw, pitch, roll) yaw만 필요하므로 나머지 버림
@@ -176,7 +175,7 @@ def start():
             print(f"Y축(Yaw): {yaw:.2f}°")
 
 
-        # ✅ 영상 출력
+        # ✅ image 출력
         cv2.imshow("Camera View", image)
 
 
