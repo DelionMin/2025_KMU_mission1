@@ -1,30 +1,37 @@
 #!/usr/bin/env python
-# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*- 2
 #=============================================
-# 2025 국민대 자율주행 경진대회 예선 과제
-# AprilTag 기반 주행 + 실시간 베지어 곡선 시각화 통합 예제
+# 본 프로그램은 2025 제8회 국민대 자율주행 경진대회에서
+# 예선과제를 수행하기 위한 파일입니다. 
+# 예선과제 수행 용도로만 사용가능하며 외부유출은 금지됩니다.
+#=============================================
+# 함께 사용되는 각종 파이썬 패키지들의 import 선언부
 #=============================================
 
 import numpy as np
-import cv2, rospy, time, threading
+import cv2, rospy, time, os, math
 from sensor_msgs.msg import Image
 from xycar_msgs.msg import XycarMotor
 from cv_bridge import CvBridge
+import matplotlib.pyplot as plt
 import apriltag
+import glob
 from scipy.spatial.transform import Rotation as R
 import matplotlib
 matplotlib.use('TkAgg')
-import matplotlib.pyplot as plt
 
 #=============================================
-# 전역 변수 선언
+# 프로그램에서 사용할 변수, 저장공간 선언부
 #=============================================
 
-image = np.empty(shape=[0])
-motor = None
-motor_msg = XycarMotor()
-Fix_Speed = 10
-bridge = CvBridge()
+image = np.empty(shape=[0])  # 카메라 이미지를 담을 변수
+ranges = None                # 라이다 데이터를 담을 변수
+motor = None                 # 모터노드
+motor_msg = XycarMotor()     # 모터 토픽 메시지
+Fix_Speed = 10               # 모터 속도 고정 상수값 
+new_angle = 0                # 모터 조향각 초기값
+new_speed = Fix_Speed        # 모터 속도 초기값
+bridge = CvBridge()          # OpenCV 함수를 사용하기 위한 브릿지 
 
 # AprilTag 위치 및 yaw값 저장용 전역변수 (시각화용)
 latest_pose_x = 0.0
@@ -35,30 +42,32 @@ latest_yaw_deg = 0.0
 stop_visualization = False
 
 #=============================================
-# 카메라 콜백함수
+# 콜백함수 - 카메라 토픽을 처리하는 콜백함수
 #=============================================
 
 def usbcam_callback(data):
+
     global image
-    image = bridge.imgmsg_to_cv2(data, "bgr8")
+
+    image = bridge.imgmsg_to_cv2(data, "bgr8") 
+
+    
+
+    # image 기본 인코딩 bgr
 
 #=============================================
-# 모터 제어 함수
+# 모터로 토픽을 발행하는 함수 
 #=============================================
 
-def drive(angle, speed):
+def drive(angle, speed):          # 주행 함수
     motor_msg.angle = float(angle)
     motor_msg.speed = float(speed)
     motor.publish(motor_msg)
-
-#=============================================
-# 베지어 함수 및 시각화 함수
-#=============================================
-
-def bezier(t, P0, P1, P2, P3):
+             
+def bezier(t, P0, P1, P2, P3):  # 베지에 곡선 함수
     return (1 - t)**3 * P0 + 3*(1 - t)**2 * t * P1 + 3*(1 - t) * t**2 * P2 + t**3 * P3
 
-def bezier_visualization_loop():
+def bezier_visualization_loop(): # 베지에 곡선 스레드
     global stop_visualization, latest_pose_x, latest_pose_z, latest_yaw_deg
 
     plt.ion()
@@ -71,7 +80,7 @@ def bezier_visualization_loop():
     while not stop_visualization:
         # AprilTag에서 받은 최신 위치 및 yaw값 사용
         P3 = np.array([latest_pose_x, latest_pose_z])
-        theta0_deg = 0  # 시작점 접선 각도(0도로 고정해도 무방, 직진 방향)
+        theta0_deg = 90  # 시작점 접선 각도(0도로 고정해도 무방, 직진 방향)
         angle_diff_deg = -latest_yaw_deg  # 끝점 접선 각도는 yaw값 사용
 
         d0, d1 = 3, 3  # 제어점 거리
@@ -104,67 +113,152 @@ def bezier_visualization_loop():
     plt.close()
 
 #=============================================
-# 메인 함수
+# 실질적인 메인 함수 
 #=============================================
+def project_point(P, point_3d):
+    point_3d_h = np.append(point_3d, 1)
+    proj = P @ point_3d_h
+    if proj[2] == 0 or np.isnan(proj[2]) or proj[2] < 1e-6:
+        # 투영 불가 시 None 반환하거나, 적당한 좌표 반환
+        return None
+    u = proj[0] / proj[2]
+    v = proj[1] / proj[2]
+    return int(u), int(v)
 
 def start():
-    global motor, image, latest_pose_x, latest_pose_z, latest_yaw_deg
+    global motor, image, ranges, latest_pose_x, latest_pose_z, latest_yaw_deg
+    print("Start program --------------")
+
+    #=========================================
+    # 노드를 생성하고, 구독/발행할 토픽들을 선언합니다.
+    #=========================================
 
     rospy.init_node('Track_Driver')
     rospy.Subscriber("/usb_cam/image_raw", Image, usbcam_callback, queue_size=1)
     motor = rospy.Publisher('xycar_motor', XycarMotor, queue_size=1)
 
-    rospy.wait_for_message("/usb_cam/image_raw", Image)
+    #=========================================
+    # 노드들로부터 첫번째 토픽들이 도착할 때까지 기다립니다.
+    #=========================================
 
-    # AprilTag 초기화
-    options = apriltag.DetectorOptions(families="tag36h11")
+    rospy.wait_for_message("/usb_cam/image_raw", Image)
+    print("Camera Ready --------------")
+    print("======================================")
+    print(" S T A R T    D R I V I N G ...")
+    print("======================================")
+
+    #=========================================
+    # 메인 루프 
+    #=========================================
+    # ✅ Apriltag Detector 초기화
+    # 감지할 태그 옵션지정 "tag36h11"
+    options = apriltag.DetectorOptions(families="tag36h11")  
+    # 태그 검출 객체 생성
     detector = apriltag.Detector(options)
 
-    # 카메라 파라미터
-    dist_coeffs = np.array([-0.325278, 0.082082, 0.000997, -0.000955, 0.0])
-    camera_matrix = np.array([
-        [371.42821, 0.0, 310.49805],
-        [0.0, 372.60371, 235.74201],
-        [0.0, 0.0, 1.0]
-    ])
-    camera_params = (371.42821, 372.60371, 310.49805, 235.74201)
-    tag_size = 5  # 태그 크기 (m)
 
+    # 초기화
     angle = 0
     speed = 5
+
+    #태그 크기(m)
+    tag_size=5
+
+    # distortion coefficients
+    dist_coeffs = np.array([-0.325278, 0.082082, 0.000997, -0.000955, 0.0])
+
+    # camera matrix
+    camera_matrix = np.array([
+    [371.42821, 0.0, 310.49805],
+    [0.0, 372.60371, 235.74201],
+    [0.0, 0.0, 1.0]
+    ])
+    # 3x4 Projection Matrix (예시)
+    P = np.array([
+    [262.19424, 0.,       307.58807, 0.],
+    [0.,        311.39255, 234.69525, 0.],
+    [0.,        0.,       1.,        0.]
+    ])
+    
+
+    # 카메라 파라미터 (fx, fy, cx, cy) (초점거리 좌표 / 센서 중앙 좌표)
+    camera_params = (371.42821, 372.60371, 310.49805, 235.74201)
 
     # 시각화 스레드 시작
     viz_thread = threading.Thread(target=bezier_visualization_loop)
     viz_thread.start()
-
-    while not rospy.is_shutdown():
+    
+    while not rospy.is_shutdown(): # 메인 루프
         if image.size == 0:
             continue
 
+        # 왜곡 보정
         undistorted = cv2.undistort(image, camera_matrix, dist_coeffs)
-        gray = cv2.cvtColor(undistorted, cv2.COLOR_BGR2GRAY)
+        
+        # 흑백 변환
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+
+        # ✅ AprilTag 검출
         detections = detector.detect(gray)
 
-        for det in detections:
-            corners = det.corners.astype(int)
-            for i in range(4):
+
+        # ✅ 검출된 태그 시각화
+        # 감지된 태그들을 순회 / 해당 프로그램에서는 태그가 1개이므로 1번만 실행됨
+        for det in detections:                  
+            corners = det.corners.astype(int)   # 태크의 코너 좌표들을 int로 변환
+            for i in range(4):                  # 코너를 잇는 사각형 그리기
+                
+                # image 상에 n번째 점과 n+1번째 점을 잇는 선 그리기 녹색, 두께 2
                 cv2.line(image, tuple(corners[i]), tuple(corners[(i + 1) % 4]), (0, 255, 0), 2)
 
+            # 태그의 중심좌표를 반환
             cx, cy = int(det.center[0]), int(det.center[1])
+            # 태그의 중심 좌표를 image 상에 출력
             cv2.putText(image, f"center:{det.center.astype(int)}", (cx, cy), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+        
 
-            pose, e0, e1 = detector.detection_pose(det, camera_params, tag_size)
-            pose_t = pose[0:3, 3]
-            pose_r = pose[0:3, 0:3]
+            # pose는 거리, 방향에 대한 행렬, e0와 e1은 오차율 관련 정보임
+            pose, e0,e1 = detector.detection_pose(det,camera_params,tag_size)
 
+
+            # pose 행렬 구조  |R t|
+            #                 |0 1|
+            # pose는 4*4 행렬임
+            # R은 3*3의 회전 행렬
+            # t는 3*1 위치벡터
+
+
+            pose_t=pose[0:3,3]    # 회전 행령 데이터 슬라이스
+            pose_r=pose[0:3,0:3]  # 위치 벡터 데이터 슬라이스
+
+
+            # 거리계산 / 위치벡터의 norm을 구한것임
+            # L2 norm은 유클리드 노름으로 해당 벡터의 크기를 계산하는 것과 동치
             distance = np.linalg.norm(pose_t)
 
+            
+            # 태그의 상대위치 출력 / 원점은 자동차인 것으로 보임
             print(f"Position (x, y, z): {pose_t}")
-            print(f"Distance: {distance:.2f} m")
 
+            #x좌표가 커지면 오른쪽으로 이동
+            #y좌표가 커지면 위아래로 이동
+            #z좌표가 커지면 앞으로 이동
+
+            # 계산한 거리 출력
+            print(f"Distance: {distance:.2f} m")   
+
+
+            # 회전 행렬 객체 생성
             rot = R.from_matrix(pose_r)
+
+            # 객체에 대해 오일러 각을 z-y-x 순서로 도 단위로 반환
             euler_angles = rot.as_euler('zyx', degrees=True)
+
+
+            # (yaw, pitch, roll) yaw만 필요하므로 나머지 버림
             _, yaw, _ = euler_angles
+
+            # yaw 값 출력
             print(f"Y축(Yaw): {yaw:.2f}°")
 
             # 실시간 위치와 yaw 업데이트 (시각화용)
@@ -172,20 +266,31 @@ def start():
             latest_pose_z = pose_t[2]
             latest_yaw_deg = yaw
 
+
+        # ✅ image 출력
         cv2.imshow("Camera View", image)
+
+
+        # 차량 제어
         drive(angle, speed)
 
+        # Default 제어 명령, 추후에 삭제 예정인데 형식은 그대로 가져다 쓰자
+
+
+        # ==================[ 수정 끝  ]================== 
+        # 0.1초 delay
         time.sleep(0.1)
+
+        
+        # 키보드 조작
         cv2.waitKey(1)
 
-    # 종료 시 스레드 종료 신호
-    global stop_visualization
-    stop_visualization = True
-    viz_thread.join()
 
 #=============================================
-# 엔트리 포인트
+# 메인함수를 호출합니다.
+# start() 함수가 실질적인 메인함수입니다.
 #=============================================
 
 if __name__ == '__main__':
+
     start()
