@@ -9,7 +9,7 @@
 #=============================================
 
 import numpy as np
-import cv2, rospy, time, os, math
+import cv2, rospy, time, os, math, threading
 from sensor_msgs.msg import Image
 from xycar_msgs.msg import XycarMotor
 from cv_bridge import CvBridge
@@ -67,40 +67,36 @@ def drive(angle, speed):          # 주행 함수
 def bezier(t, P0, P1, P2, P3):  # 베지에 곡선 함수
     return (1 - t)**3 * P0 + 3*(1 - t)**2 * t * P1 + 3*(1 - t) * t**2 * P2 + t**3 * P3
 
-def bezier_visualization_loop(): # 베지에 곡선 스레드
+def bezier_visualization_loop():
     global stop_visualization, latest_pose_x, latest_pose_z, latest_yaw_deg
 
-    plt.ion()
-    fig, ax = plt.subplots(figsize=(8,6))
-    ax.set_facecolor('white')
-
-    # 시작점은 항상 원점(0,0) 고정 (차량 현재 위치 기준)
-    P0 = np.array([0, 0])
-
-    while not stop_visualization:
-        # AprilTag에서 받은 최신 위치 및 yaw값 사용
-        P3 = np.array([latest_pose_x, latest_pose_z])
-        theta0_deg = 90  # 시작점 접선 각도(0도로 고정해도 무방, 직진 방향)
-        angle_diff_deg = -latest_yaw_deg  # 끝점 접선 각도는 yaw값 사용
-
-        d0, d1 = 3, 3  # 제어점 거리
-
+    def compute_control_points(P0, P3, theta0_deg, yaw_deg, d0=3, d1=3):
         theta0 = np.deg2rad(theta0_deg)
-        theta1 = theta0 + np.deg2rad(angle_diff_deg)
-
+        theta1 = np.deg2rad(theta0_deg - yaw_deg)
         P1 = P0 + d0 * np.array([np.cos(theta0), np.sin(theta0)])
         P2 = P3 - d1 * np.array([np.cos(theta1), np.sin(theta1)])
+        return P1, P2, theta0, theta1
 
-        ts = np.linspace(0, 1, 100)
+    plt.ion()
+    fig, ax = plt.subplots(figsize=(8, 6))
+
+    P0 = np.array([0, 0])  # 시작점 고정
+    theta0_deg = 90        # 차량 진행 방향 기준 (정면)
+
+    while not stop_visualization:
+        P3 = np.array([latest_pose_x, latest_pose_z])
+        P1, P2, theta0, theta1 = compute_control_points(P0, P3, theta0_deg, latest_yaw_deg)
+
+        ts = np.linspace(0, 1, 10)
         curve = np.array([bezier(t, P0, P1, P2, P3) for t in ts])
 
         ax.clear()
         ax.set_facecolor('white')
-        ax.plot(curve[:,0], curve[:,1], 'b-', label='Bezier Curve')
-        ax.scatter([P0[0], P1[0], P2[0], P3[0]], [P0[1], P1[1], P2[1], P3[1]],
-                   c=['green', 'red', 'red', 'magenta'], s=100)
-        ax.arrow(P0[0], P0[1], np.cos(theta0), np.sin(theta0), color='green', head_width=0.3)
-        ax.arrow(P3[0], P3[1], np.cos(theta1), np.sin(theta1), color='magenta', head_width=0.3)
+
+        ax.plot(curve[:, 0], curve[:, 1], 'b-', label='Bezier Curve')
+        ax.scatter(*zip(P0, P1, P2, P3), c=['green', 'red', 'red', 'magenta'], s=100)
+        ax.arrow(*P0, np.cos(theta0), np.sin(theta0), color='green', head_width=0.3)
+        ax.arrow(*P3, np.cos(theta1), np.sin(theta1), color='magenta', head_width=0.3)
 
         ax.set_aspect('equal')
         ax.grid(True)
@@ -112,18 +108,11 @@ def bezier_visualization_loop(): # 베지에 곡선 스레드
     plt.ioff()
     plt.close()
 
+
 #=============================================
 # 실질적인 메인 함수 
 #=============================================
-def project_point(P, point_3d):
-    point_3d_h = np.append(point_3d, 1)
-    proj = P @ point_3d_h
-    if proj[2] == 0 or np.isnan(proj[2]) or proj[2] < 1e-6:
-        # 투영 불가 시 None 반환하거나, 적당한 좌표 반환
-        return None
-    u = proj[0] / proj[2]
-    v = proj[1] / proj[2]
-    return int(u), int(v)
+
 
 def start():
     global motor, image, ranges, latest_pose_x, latest_pose_z, latest_yaw_deg
@@ -284,7 +273,9 @@ def start():
         
         # 키보드 조작
         cv2.waitKey(1)
-
+    global stop_visualization
+    stop_visualization = True
+    viz_thread.join()
 
 #=============================================
 # 메인함수를 호출합니다.
