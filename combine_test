@@ -1,0 +1,191 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+#=============================================
+# 2025 국민대 자율주행 경진대회 예선 과제
+# AprilTag 기반 주행 + 실시간 베지어 곡선 시각화 통합 예제
+#=============================================
+
+import numpy as np
+import cv2, rospy, time, threading
+from sensor_msgs.msg import Image
+from xycar_msgs.msg import XycarMotor
+from cv_bridge import CvBridge
+import apriltag
+from scipy.spatial.transform import Rotation as R
+import matplotlib
+matplotlib.use('TkAgg')
+import matplotlib.pyplot as plt
+
+#=============================================
+# 전역 변수 선언
+#=============================================
+
+image = np.empty(shape=[0])
+motor = None
+motor_msg = XycarMotor()
+Fix_Speed = 10
+bridge = CvBridge()
+
+# AprilTag 위치 및 yaw값 저장용 전역변수 (시각화용)
+latest_pose_x = 0.0
+latest_pose_z = 0.0
+latest_yaw_deg = 0.0
+
+# 쓰레드 종료 플래그
+stop_visualization = False
+
+#=============================================
+# 카메라 콜백함수
+#=============================================
+
+def usbcam_callback(data):
+    global image
+    image = bridge.imgmsg_to_cv2(data, "bgr8")
+
+#=============================================
+# 모터 제어 함수
+#=============================================
+
+def drive(angle, speed):
+    motor_msg.angle = float(angle)
+    motor_msg.speed = float(speed)
+    motor.publish(motor_msg)
+
+#=============================================
+# 베지어 함수 및 시각화 함수
+#=============================================
+
+def bezier(t, P0, P1, P2, P3):
+    return (1 - t)**3 * P0 + 3*(1 - t)**2 * t * P1 + 3*(1 - t) * t**2 * P2 + t**3 * P3
+
+def bezier_visualization_loop():
+    global stop_visualization, latest_pose_x, latest_pose_z, latest_yaw_deg
+
+    plt.ion()
+    fig, ax = plt.subplots(figsize=(8,6))
+    ax.set_facecolor('white')
+
+    # 시작점은 항상 원점(0,0) 고정 (차량 현재 위치 기준)
+    P0 = np.array([0, 0])
+
+    while not stop_visualization:
+        # AprilTag에서 받은 최신 위치 및 yaw값 사용
+        P3 = np.array([latest_pose_x, latest_pose_z])
+        theta0_deg = 0  # 시작점 접선 각도(0도로 고정해도 무방, 직진 방향)
+        angle_diff_deg = -latest_yaw_deg  # 끝점 접선 각도는 yaw값 사용
+
+        d0, d1 = 3, 3  # 제어점 거리
+
+        theta0 = np.deg2rad(theta0_deg)
+        theta1 = theta0 + np.deg2rad(angle_diff_deg)
+
+        P1 = P0 + d0 * np.array([np.cos(theta0), np.sin(theta0)])
+        P2 = P3 - d1 * np.array([np.cos(theta1), np.sin(theta1)])
+
+        ts = np.linspace(0, 1, 100)
+        curve = np.array([bezier(t, P0, P1, P2, P3) for t in ts])
+
+        ax.clear()
+        ax.set_facecolor('white')
+        ax.plot(curve[:,0], curve[:,1], 'b-', label='Bezier Curve')
+        ax.scatter([P0[0], P1[0], P2[0], P3[0]], [P0[1], P1[1], P2[1], P3[1]],
+                   c=['green', 'red', 'red', 'magenta'], s=100)
+        ax.arrow(P0[0], P0[1], np.cos(theta0), np.sin(theta0), color='green', head_width=0.3)
+        ax.arrow(P3[0], P3[1], np.cos(theta1), np.sin(theta1), color='magenta', head_width=0.3)
+
+        ax.set_aspect('equal')
+        ax.grid(True)
+        ax.legend()
+        ax.set_title(f'Bezier Curve\nEnd point yaw: {latest_yaw_deg:.2f}°')
+
+        plt.pause(0.05)
+
+    plt.ioff()
+    plt.close()
+
+#=============================================
+# 메인 함수
+#=============================================
+
+def start():
+    global motor, image, latest_pose_x, latest_pose_z, latest_yaw_deg
+
+    rospy.init_node('Track_Driver')
+    rospy.Subscriber("/usb_cam/image_raw", Image, usbcam_callback, queue_size=1)
+    motor = rospy.Publisher('xycar_motor', XycarMotor, queue_size=1)
+
+    rospy.wait_for_message("/usb_cam/image_raw", Image)
+
+    # AprilTag 초기화
+    options = apriltag.DetectorOptions(families="tag36h11")
+    detector = apriltag.Detector(options)
+
+    # 카메라 파라미터
+    dist_coeffs = np.array([-0.325278, 0.082082, 0.000997, -0.000955, 0.0])
+    camera_matrix = np.array([
+        [371.42821, 0.0, 310.49805],
+        [0.0, 372.60371, 235.74201],
+        [0.0, 0.0, 1.0]
+    ])
+    camera_params = (371.42821, 372.60371, 310.49805, 235.74201)
+    tag_size = 5  # 태그 크기 (m)
+
+    angle = 0
+    speed = 5
+
+    # 시각화 스레드 시작
+    viz_thread = threading.Thread(target=bezier_visualization_loop)
+    viz_thread.start()
+
+    while not rospy.is_shutdown():
+        if image.size == 0:
+            continue
+
+        undistorted = cv2.undistort(image, camera_matrix, dist_coeffs)
+        gray = cv2.cvtColor(undistorted, cv2.COLOR_BGR2GRAY)
+        detections = detector.detect(gray)
+
+        for det in detections:
+            corners = det.corners.astype(int)
+            for i in range(4):
+                cv2.line(image, tuple(corners[i]), tuple(corners[(i + 1) % 4]), (0, 255, 0), 2)
+
+            cx, cy = int(det.center[0]), int(det.center[1])
+            cv2.putText(image, f"center:{det.center.astype(int)}", (cx, cy), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+
+            pose, e0, e1 = detector.detection_pose(det, camera_params, tag_size)
+            pose_t = pose[0:3, 3]
+            pose_r = pose[0:3, 0:3]
+
+            distance = np.linalg.norm(pose_t)
+
+            print(f"Position (x, y, z): {pose_t}")
+            print(f"Distance: {distance:.2f} m")
+
+            rot = R.from_matrix(pose_r)
+            euler_angles = rot.as_euler('zyx', degrees=True)
+            _, yaw, _ = euler_angles
+            print(f"Y축(Yaw): {yaw:.2f}°")
+
+            # 실시간 위치와 yaw 업데이트 (시각화용)
+            latest_pose_x = pose_t[0]
+            latest_pose_z = pose_t[2]
+            latest_yaw_deg = yaw
+
+        cv2.imshow("Camera View", image)
+        drive(angle, speed)
+
+        time.sleep(0.1)
+        cv2.waitKey(1)
+
+    # 종료 시 스레드 종료 신호
+    global stop_visualization
+    stop_visualization = True
+    viz_thread.join()
+
+#=============================================
+# 엔트리 포인트
+#=============================================
+
+if __name__ == '__main__':
+    start()
