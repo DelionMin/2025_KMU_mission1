@@ -60,7 +60,15 @@ def drive(angle, speed):          # 주행 함수
 #=============================================
 # 실질적인 메인 함수 
 #=============================================
-
+def project_point(P, point_3d):
+    point_3d_h = np.append(point_3d, 1)
+    proj = P @ point_3d_h
+    if proj[2] == 0 or np.isnan(proj[2]) or proj[2] < 1e-6:
+        # 투영 불가 시 None 반환하거나, 적당한 좌표 반환
+        return None
+    u = proj[0] / proj[2]
+    v = proj[1] / proj[2]
+    return int(u), int(v)
 
 def start():
     global motor, image, ranges
@@ -98,16 +106,36 @@ def start():
     angle = 0
     speed = 5
 
-    #태그 크기
+    #태그 크기(m)
     tag_size=5
 
+    # distortion coefficients
+    dist_coeffs = np.array([-0.325278, 0.082082, 0.000997, -0.000955, 0.0])
+
+    # camera matrix
+    camera_matrix = np.array([
+    [371.42821, 0.0, 310.49805],
+    [0.0, 372.60371, 235.74201],
+    [0.0, 0.0, 1.0]
+    ])
+    # 3x4 Projection Matrix (예시)
+    P = np.array([
+    [262.19424, 0.,       307.58807, 0.],
+    [0.,        311.39255, 234.69525, 0.],
+    [0.,        0.,       1.,        0.]
+    ])
+    
+
     # 카메라 파라미터 (fx, fy, cx, cy) (초점거리 좌표 / 센서 중앙 좌표)
-    camera_params = (300, 300, 320, 240)
+    camera_params = (371.42821, 372.60371, 310.49805, 235.74201)
 
     while not rospy.is_shutdown(): # 메인 루프
         if image.size == 0:
             continue
 
+        # 왜곡 보정
+        undistorted = cv2.undistort(image, camera_matrix, dist_coeffs)
+        
         # 흑백 변환
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
 
@@ -173,6 +201,8 @@ def start():
 
             # yaw 값 출력
             print(f"Y축(Yaw): {yaw:.2f}°")
+
+
 
 
         # ✅ image 출력
