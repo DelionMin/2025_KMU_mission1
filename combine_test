@@ -28,10 +28,10 @@ image = np.empty(shape=[0])  # 카메라 이미지를 담을 변수
 ranges = None                # 라이다 데이터를 담을 변수
 motor = None                 # 모터노드
 motor_msg = XycarMotor()     # 모터 토픽 메시지
-Fix_Speed = 10               # 모터 속도 고정 상수값 
+Fix_Speed = 10               # 모터 속도 고정 상수값
 new_angle = 0                # 모터 조향각 초기값
 new_speed = Fix_Speed        # 모터 속도 초기값
-bridge = CvBridge()          # OpenCV 함수를 사용하기 위한 브릿지 
+bridge = CvBridge()          # OpenCV 함수를 사용하기 위한 브릿지
 
 # AprilTag 위치 및 yaw값 저장용 전역변수 (시각화용)
 latest_pose_x = 0.0
@@ -70,11 +70,17 @@ def bezier(t, P0, P1, P2, P3):  # 베지에 곡선 함수
 def bezier_visualization_loop():
     global stop_visualization, latest_pose_x, latest_pose_z, latest_yaw_deg
 
+    # 제어점 계산
     def compute_control_points(P0, P3, theta0_deg, yaw_deg, d0=3, d1=3):
+        
+        # 벡터 각도 계산
         theta0 = np.deg2rad(theta0_deg)
         theta1 = np.deg2rad(theta0_deg - yaw_deg)
+
+        # 제어점 계산
         P1 = P0 + d0 * np.array([np.cos(theta0), np.sin(theta0)])
         P2 = P3 - d1 * np.array([np.cos(theta1), np.sin(theta1)])
+        
         return P1, P2, theta0, theta1
 
     plt.ion()
@@ -90,19 +96,25 @@ def bezier_visualization_loop():
         ts = np.linspace(0, 1, 10)
         curve = np.array([bezier(t, P0, P1, P2, P3) for t in ts])
 
-        ax.clear()
-        ax.set_facecolor('white')
+        ax.clear()                  # 그림 지우기
+        ax.set_facecolor('white')   # 배경색 설정
 
-        ax.plot(curve[:, 0], curve[:, 1], 'b-', label='Bezier Curve')
-        ax.scatter(*zip(P0, P1, P2, P3), c=['green', 'red', 'red', 'magenta'], s=100)
+        ax.plot(curve[:, 0], curve[:, 1], 'b-', label='Bezier Curve')  # 곡선 그리기
+        ax.scatter(*zip(P0, P1, P2, P3), c=['green', 'red', 'red', 'magenta'], s=100)  # 점 그리기
+
+        # 벡터 화살표 그리기
         ax.arrow(*P0, np.cos(theta0), np.sin(theta0), color='green', head_width=0.3)
         ax.arrow(*P3, np.cos(theta1), np.sin(theta1), color='magenta', head_width=0.3)
 
+        # x축 y축 비율 같게 설정
         ax.set_aspect('equal')
+        # 격자
         ax.grid(True)
+        # 범례
         ax.legend()
+        # 제목
         ax.set_title(f'Bezier Curve\nEnd point yaw: {latest_yaw_deg:.2f}°')
-
+        # 딜레이
         plt.pause(0.05)
 
     plt.ioff()
@@ -162,6 +174,7 @@ def start():
     [0.0, 372.60371, 235.74201],
     [0.0, 0.0, 1.0]
     ])
+
     # 3x4 Projection Matrix (예시)
     P = np.array([
     [262.19424, 0.,       307.58807, 0.],
