@@ -5,6 +5,7 @@ import signal
 import numpy as np
 import cv2
 from math import inf
+from ultralytics import YOLO
 
 # 이 코드(class)는 step함수에서 다음과 같이 동작한다.
 # 1. 이미지(카메라 데이터)와 class 내의 state를 기반으로 차선의 위치를 알아낸다.
@@ -20,6 +21,31 @@ class Drive:
         DRIVE_STATE_NONE = 0
         DRIVE_STATE_LEFT = 1
         DRIVE_STATE_RIGHT = 2
+    
+    class State_change(Enum):
+        INIT = 0
+        DRIVE_STATE_START = 1
+        DRIVE_STATE_STRAIGHT = 2
+        DRIVE_STATE_END = 3
+
+    class Angle_change(Enum):
+        INIT = 0
+        DRIVE_STATE_START = 30
+        DRIVE_STATE_STRAIGHT = 0
+        DRIVE_STATE_END = 30
+
+    class Class_YOLO(Enum):
+        CLASS_SIGNAL_GREEN = 0
+        CLASS_RUBBERCONE = 1
+        CLASS_CAR_YELLOW = 2
+        CLASS_CAR_BLACK = 3
+        CLASS_SIGNAL_RED = 4
+        CLASS_SIGNAL_ORANGE = 5
+    
+    class Duration_change(Enum):
+        DURATION_START = 2
+        DURATION_STRAIGHT = 1
+        DRIVE_STATE_END = 2
 
     def __init__(self) -> None:
         """
@@ -27,6 +53,11 @@ class Drive:
         """
         self._image = None
         self._ranges = None
+
+        self.yolo_model = YOLO(os.path.join(os.path.dirname(__file__), "detector.pt"))
+
+        self.result_yolo = None
+
 
         # ================== [ 영상 처리 관련 변수 시작 ] ==================
 
@@ -92,12 +123,16 @@ class Drive:
         # __change_lane 에서 조향각 결정 flag (최초 1회 실행)
         # __change_lane 에서 차로 변경 방향 결정 flag (최초 1회 실행)
 
-        self._change_to_the_right = True
+        self._change_to_the_left = True
         # __change_lane 에서 차로 우측으로 변경 / False 시 좌측으로 변경
 
         self._threshold_dist_middle_lane = 5
         # __change_lane 에서 차량이 중앙선으로부터 확보한 뒤 탈출하도록 하는 threshold
 
+        self._state_change = self.State_change.INIT
+
+
+        self._time_init_change = None
 
 
         # Logging
@@ -231,6 +266,8 @@ class Drive:
 
 
         self._logging(img_original=img_white + img_yellow)
+
+
         # 일단 잡힌 차선들 모두 다 출력
 
         return base_line_white, base_line_yellow
@@ -371,84 +408,139 @@ class Drive:
         # 점수 임계치가 가지는 하한선 설정
         self._score_bound_min = -24
 
-    def __change_lane(self, lane_yellow):
-        '''
-        라이다, YOLO로 차선 변경 분기 마련 후 flag 세우고 검증 필요
-        '''
-
-        # score는 가능한 가장 낮은 점수의 값으로 설정
-        score_l, pos_l = -inf, None
-        score_r, pos_r = -inf, None
-
-        # positions 리스트(또는 np.array)를 순회하여 가장 점수가 큰 위치 결정
-        for pos, valid in enumerate(lane_yellow):
-        # pos -> position의 index , valid -> 내부 값
-            if not valid:
-                continue
-
-            # 이전 차선의 위치와 차선 후보의 거리 차를 이용하여 점수를 낸다.
-            score_l_cand = -abs(pos - self._lane_yellow_l)
-            score_r_cand = -abs(pos - self._lane_yellow_r)
-
-            # 점수가 가장 큰 차선 후보의 인덱스 번호를 저장한다.
-            if score_l_cand > score_l:
-                score_l = score_l_cand
-                pos_l = pos
-            if score_r_cand > score_r:
-                score_r = score_r_cand
-                pos_r = pos
+    def __change_lane(self, lane_white, lane_yellow):
         
-                # score는 가능한 가장 낮은 점수의 값으로 설정
+        # < State 예시 >
+        # self.State_change.INIT
+        # self.State_change.DRIVE_STATE_START 
+        # self.State_change.DRIVE_STATE_STRAIGHT
+        # self.State_change.DRIVE_STATE_END
+
+        # lane_white는 상시 인식
+        # lane_yellow는 점선때문에 인식 안 될때는 일단 대기
+        # lane_white, lane_yellow에 np.where 후 평균 때려서 차선 위치 index 추정
+        # 차선 위치 index 크기 비교해서 현재 좌, 우측 차선 위치 추정
+        # 현재 차량 위치(baseline 위치랑 lane_yellow index 위치 차이 값으로 초기 조향값 설정)
+        # 탈출 분기가 고민
         
-        if (not self._flag_angle_decided):
-        # 최초 1회 실행용 flag (최초 조향각 결정 목적)
-            if(pos_l):
-            # 노란 차선 감지 시
-                pos_yellow_lane = (pos_l + pos_r) // 2
-                base_line_middle = self._base_line_data_length // 2
+        # 초안: 위에서 구한 lane_yellow랑 baseline 위치 차이가 threshold 넘기면 
+        # 1. 분기 탈출
+        # 2. self.__choose_lane_init()
 
-                angle = base_line_middle - pos_yellow_lane
-                self._flag_angle_decided = True
-            # 노란 차선 감지 '아직' 못 했을 시
-            else:
-                angle = 0
+        lane_white_mean = np.where(lane_white == 255).mean()
+        pos_current = self._base_line_data_length / 2
+        # 현재 차량 위치 (프레임 상)
 
-        else:
-        # 조향각 결정 후
-            if (pos_yellow_lane == base_line_middle):
-            # 차량 중앙선 도달 시
-                angle = 0
-                # 직진
-            elif (abs(pos_yellow_lane - base_line_middle) > self._threshold_dist_middle_lane):
-            # 거리 확보된 후 
+        if (self._state_change == self.State_change.INIT):
+            self._time_init_change = time.time()
+            self._state_change = self.State_change.DRIVE_STATE_START
+            if (lane_white_mean < pos_current):
+                self._change_to_the_left = False
+                # 차량 변경 방향 판정
+
+        elif(self._state_change == self.State_change.DRIVE_STATE_START):
+            self._time_init_change = time.time()   
+
+            angle = self.Angle_change.DRIVE_STATE_START
+            # speed 바꿀거면 어케저케.. step도 수정하고 해야된다
+
+            if ((time.time() - self._time_init_change) > self.Duration_change.DURATION_START):
+                self._state_change = self.State_change.DRIVE_STATE_STRAIGHT
+                # State 천이
+
+
+
+        elif(self._state_change == self.State_change.DRIVE_STATE_STRAIGHT):
+            self._time_init_change = time.time()
+
+            angle = 0
+
+            if ((time.time() - self._time_init_change) > self.Duration_change.DURATION_STRAIGHT):
+                self._state_change = self.State_change.DRIVE_STATE_END
+                # State 천이
+
+            
+            
+
+        elif(self._state_change == self.State_change.DRIVE_STATE_END):
+            self._time_init_change = time.time()
+
+            angle = self.Angle_change.DRIVE_STATE_END
+
+            if ((time.time() - self._time_init_change) > self.Duration_change.DURATION_END):
                 self._flag_change_lane = False
+                self.__choose_lane_init()
                 angle = 0
+                # State 천이
+
+        if (self._change_to_the_left):
+            angle = angle * (-1)
+        # 차선 변경 방향 맞춰주기
 
         return angle
-         
+    
+    def _YOLO_step(self):
+        image = self._image
+        self.result_yolo = self.yolo_model(image, verbose=False)
+        image_YOLO_plot = self.result_yolo[0].plot()
+        cv2.imshow("YOLO", image_YOLO_plot)
+        # YOLO 이미지 띄우기
+
+    def car_detected(self):
+        result_yolo = self.result_yolo
+        ranges = self._ranges
+
+        LIDAR_SAFETY_DISTANCE = 20
+        _flag_car_detected = False
+        # YOLO 결과 차량이 인식되었는지 flag
+
+        ranges_ROI = np.concatenate([ranges[0:30], ranges[330:360]])
+
+        min_ROI = np.min(ranges_ROI)
+
+        if result_yolo:
+            # YOLO 값이 들어왔을 때
+            for box in result_yolo[0].boxes:
+                cls_id = int(box.cls[0].item())
+                if ((cls_id == self.Class_YOLO.CLASS_CAR_BLACK) or (cls_id == self.Class_YOLO.CLASS_CAR_YELLOW)):
+                    _flag_car_detected = True
+                    # 노란 차, 검은 차 인식 여부 확인
+
+        if (min_ROI < LIDAR_SAFETY_DISTANCE) and (_flag_car_detected):
+            return True
+        else:
+            return False
+
+
     def step(self):
         image = self._image
-
+        self._YOLO_step()
         lane_white, lane_yellow = self.__detect_lane(image)
 
         '''
         라이다, YOLO로 차선 변경 분기 마련 후 flag 세우고 검증 필요
         '''
+
+        speed = 10.0 # default
+        # 나중에 값 바꿔서 감속 넣어도 돼
+
+        if self.car_detected() and not self._flag_change_lane:
+            self._flag_change_lane = True
+
         if self._flag_change_lane:
         # _flag_change_lane는 라이다로 제일 가까운 값 threshold보다 작을 때 flag 올려버리자 
         # flag 내린 다음에 self.__change_lane_init() 돌려주고
+            angle = self.__change_lane(lane_white, lane_yellow)
+            print("CHANGING_LANES")
 
-            angle = self.__change_lane(lane_yellow)
         else:
             lane_group = lane_white + lane_yellow
             angle = self.__choose_lane(lane_group)
 
+
         '''
         라이다, YOLO로 차선 변경 분기 마련 후 flag 세우고 검증 필요
         '''
-        
-        speed = 10.0 # default
-        # 나중에 값 바꿔서 감속 넣어도 돼
-
+    
         return angle, speed
         
