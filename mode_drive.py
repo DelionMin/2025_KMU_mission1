@@ -30,9 +30,10 @@ class Drive:
 
     class Angle_change(Enum):
         INIT = 0
-        DRIVE_STATE_START = 30
+        DRIVE_STATE_START = 60
         DRIVE_STATE_STRAIGHT = 0
-        DRIVE_STATE_END = 30
+        DRIVE_STATE_END = -60
+        # START, END의 부호는 반대
 
     class Class_YOLO(Enum):
         CLASS_SIGNAL_GREEN = 0
@@ -44,8 +45,8 @@ class Drive:
     
     class Duration_change(Enum):
         DURATION_START = 2
-        DURATION_STRAIGHT = 1
-        DRIVE_STATE_END = 2
+        DURATION_STRAIGHT = 7
+        DURATION_END = 2
 
     def __init__(self) -> None:
         """
@@ -427,55 +428,88 @@ class Drive:
         # 1. 분기 탈출
         # 2. self.__choose_lane_init()
 
-        lane_white_mean = np.where(lane_white == 255).mean()
-        pos_current = self._base_line_data_length / 2
-        # 현재 차량 위치 (프레임 상)
-
         if (self._state_change == self.State_change.INIT):
             self._time_init_change = time.time()
             self._state_change = self.State_change.DRIVE_STATE_START
+            self._time_init_change = time.time()
+            # 타임스탬프
+
+            lane_white_mean = np.array(np.where(lane_white == 255)).mean()
+            pos_current = self._base_line_data_length / 2
+            # 현재 차량 위치 (프레임 상)
+
             if (lane_white_mean < pos_current):
                 self._change_to_the_left = False
                 # 차량 변경 방향 판정
+            
+            angle = 0
+            # angle에 아무 값
 
-        elif(self._state_change == self.State_change.DRIVE_STATE_START):
-            self._time_init_change = time.time()   
+        elif(self._state_change == self.State_change.DRIVE_STATE_START):   
 
-            angle = self.Angle_change.DRIVE_STATE_START
+            angle = self.Angle_change.DRIVE_STATE_START.value
             # speed 바꿀거면 어케저케.. step도 수정하고 해야된다
 
-            if ((time.time() - self._time_init_change) > self.Duration_change.DURATION_START):
+            time_elapsed = time.time() - self._time_init_change
+
+            if (time_elapsed > self.Duration_change.DURATION_START.value):
                 self._state_change = self.State_change.DRIVE_STATE_STRAIGHT
+                self._time_init_change = time.time()
+                # 타임스탬프
+                
                 # State 천이
 
-
+            #DEBUGGING
+            print("STATE_START")
+            print("time_elapsed:", time_elapsed)
+            #DEBUGGING
 
         elif(self._state_change == self.State_change.DRIVE_STATE_STRAIGHT):
-            self._time_init_change = time.time()
 
             angle = 0
 
-            if ((time.time() - self._time_init_change) > self.Duration_change.DURATION_STRAIGHT):
+            time_elapsed = time.time() - self._time_init_change
+
+            if (time_elapsed > self.Duration_change.DURATION_STRAIGHT.value):
                 self._state_change = self.State_change.DRIVE_STATE_END
+                self._time_init_change = time.time()
+                # 타임스탬프
+
                 # State 천이
 
-            
-            
+            #DEBUGGING
+            print("STATE_STRAIGHT")
+            print("time_elapsed:", time_elapsed)
+            #DEBUGGING
 
         elif(self._state_change == self.State_change.DRIVE_STATE_END):
-            self._time_init_change = time.time()
 
-            angle = self.Angle_change.DRIVE_STATE_END
+            angle = self.Angle_change.DRIVE_STATE_END.value
 
-            if ((time.time() - self._time_init_change) > self.Duration_change.DURATION_END):
+
+            time_elapsed = time.time() - self._time_init_change
+
+            if (time_elapsed > self.Duration_change.DURATION_END.value):
                 self._flag_change_lane = False
+                self._state_change = self.State_change.INIT
                 self.__choose_lane_init()
                 angle = 0
                 # State 천이
 
+            #DEBUGGING
+            print("STATE_END")
+            print("time_elapsed:", time_elapsed)
+            #DEBUGGING
+
         if (self._change_to_the_left):
             angle = angle * (-1)
         # 차선 변경 방향 맞춰주기
+
+        # DEBUGGING
+        print("angle: ", angle)
+        print("============================")
+        # DEBUGGING 
+
 
         return angle
     
@@ -502,7 +536,8 @@ class Drive:
             # YOLO 값이 들어왔을 때
             for box in result_yolo[0].boxes:
                 cls_id = int(box.cls[0].item())
-                if ((cls_id == self.Class_YOLO.CLASS_CAR_BLACK) or (cls_id == self.Class_YOLO.CLASS_CAR_YELLOW)):
+
+                if ((cls_id == self.Class_YOLO.CLASS_CAR_BLACK.value) or (cls_id == self.Class_YOLO.CLASS_CAR_YELLOW.value)):
                     _flag_car_detected = True
                     # 노란 차, 검은 차 인식 여부 확인
 
@@ -524,14 +559,13 @@ class Drive:
         speed = 10.0 # default
         # 나중에 값 바꿔서 감속 넣어도 돼
 
-        if self.car_detected() and not self._flag_change_lane:
+        if self.car_detected() and not (self._flag_change_lane):
             self._flag_change_lane = True
 
         if self._flag_change_lane:
         # _flag_change_lane는 라이다로 제일 가까운 값 threshold보다 작을 때 flag 올려버리자 
         # flag 내린 다음에 self.__change_lane_init() 돌려주고
             angle = self.__change_lane(lane_white, lane_yellow)
-            print("CHANGING_LANES")
 
         else:
             lane_group = lane_white + lane_yellow
