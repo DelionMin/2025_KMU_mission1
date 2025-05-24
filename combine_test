@@ -75,7 +75,7 @@ def bezier_visualization_loop():
 
     t=0.0001
 
-    def compute_control_points(P0, P3, theta0_deg, yaw_deg, d0=10, d1=20):
+    def compute_control_points(P0, P3, theta0_deg, yaw_deg, d0=20, d1=30):
         theta0 = np.deg2rad(theta0_deg)
         theta1 = np.deg2rad(theta0_deg - yaw_deg)
         P1 = P0 + d0 * np.array([np.cos(theta0), np.sin(theta0)])
@@ -125,20 +125,23 @@ def bezier_visualization_loop():
         plt.pause(1)
 
 
-
+        # 현재 위치를 상대 위치로 도출하기 / 처음 p3위치 - 마지막 p3 위치
         current_position = P3 - np.array([latest_pose_x, latest_pose_z])
         
-        # Bezier 곡선이 curve라는 변수로 저장되어 있다고 가정 (shape: (N, 2))
-        distances = np.linalg.norm(curve - current_position, axis=1)  # 각 점과의 거리
+        # 베지에 곡선 상의 각 점과의 거리
+        distances = np.linalg.norm(curve - current_position, axis=1)
+
         min_index = np.argmin(distances)  # 가장 가까운 점의 인덱스
         closest_point = curve[min_index]  # 가장 가까운 점의 좌표
 
-        
-        if closest_point[0]<current_position[0]:
+
+        # 가장 가짜운 점이 x축상 좌측에 있다면
+        if closest_point[0]<current_position[0]: 
             angle = -50
-        else:
+        else:                                    # 우측에 있다면
             angle = 50
              
+        # 점 궤적 그리기
         ax.scatter(*zip(current_position, P1, P2, P3,closest_point), c=['green', 'red', 'red', 'magenta','yellow'], s=100)
 
 
@@ -219,11 +222,10 @@ def start():
         if image.size == 0:
             continue
 
-        # 왜곡 보정
-        undistorted = cv2.undistort(image, camera_matrix, dist_coeffs)
+        # 왜곡 보정 undistorted = cv2.undistort(image, camera_matrix, dist_coeffs)
         
         # 흑백 변환
-        gray = cv2.cvtColor(undistorted, cv2.COLOR_BGR2GRAY)
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
 
         # ✅ AprilTag 검출
         detections = detector.detect(gray)
@@ -236,12 +238,12 @@ def start():
             for i in range(4):                  # 코너를 잇는 사각형 그리기
                 
                 # image 상에 n번째 점과 n+1번째 점을 잇는 선 그리기 녹색, 두께 2
-                cv2.line(undistorted, tuple(corners[i]), tuple(corners[(i + 1) % 4]), (0, 255, 0), 2)
+                cv2.line(image, tuple(corners[i]), tuple(corners[(i + 1) % 4]), (0, 255, 0), 2)
 
             # 태그의 중심좌표를 반환
             cx, cy = int(det.center[0]), int(det.center[1])
             # 태그의 중심 좌표를 image 상에 출력
-            cv2.putText(undistorted, f"center:{det.center.astype(int)}", (cx, cy), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+            cv2.putText(image, f"center:{det.center.astype(int)}", (cx, cy), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
         
 
             # pose는 거리, 방향에 대한 행렬, e0와 e1은 오차율 관련 정보임
@@ -295,8 +297,8 @@ def start():
 
 
         # ✅ image 출력
-        cv2.imshow("undistorted View", undistorted)
         cv2.imshow("Camera View", image)
+
         # 차량 제어
         drive(angle, speed)
 
