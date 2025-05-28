@@ -1,0 +1,383 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*- 2
+#=============================================
+# 본 프로그램은 2025 제8회 국민대 자율주행 경진대회에서
+# 예선과제를 수행하기 위한 파일입니다. 
+# 예선과제 수행 용도로만 사용가능하며 외부유출은 금지됩니다.
+#=============================================
+# 함께 사용되는 각종 파이썬 패키지들의 import 선언부
+#=============================================
+
+import numpy as np
+import cv2, rospy, time, os, math, threading
+import pygame
+from sensor_msgs.msg import Image
+from xycar_msgs.msg import XycarMotor
+from cv_bridge import CvBridge
+import matplotlib.pyplot as plt
+import apriltag
+import glob
+from scipy.spatial.transform import Rotation as R
+import matplotlib
+matplotlib.use('TkAgg')
+
+#=============================================
+# 프로그램에서 사용할 변수, 저장공간 선언부
+#=============================================
+
+image = np.empty(shape=[0])  # 카메라 이미지를 담을 변수
+ranges = None                # 라이다 데이터를 담을 변수
+motor = None                 # 모터노드
+motor_msg = XycarMotor()     # 모터 토픽 메시지
+Fix_Speed = 10               # 모터 속도 고정 상수값
+new_angle = 0                # 모터 조향각 초기값
+new_speed = Fix_Speed        # 모터 속도 초기값
+bridge = CvBridge()          # OpenCV 함수를 사용하기 위한 브릿지
+
+# AprilTag 위치 및 yaw값 저장용 전역변수 (시각화용)
+latest_pose_x = 0.0
+latest_pose_z = 0.0
+latest_yaw_deg = 0.0
+
+angle = 0
+
+# 쓰레드 종료 플래그
+stop_visualization = False
+
+#=============================================
+# 콜백함수 - 카메라 토픽을 처리하는 콜백함수
+#=============================================
+
+def usbcam_callback(data):
+
+    global image
+
+    image = bridge.imgmsg_to_cv2(data, "bgr8") 
+
+    
+
+    # image 기본 인코딩 bgr
+
+#=============================================
+# 모터로 토픽을 발행하는 함수 
+#=============================================
+
+def drive(angle, speed):          # 주행 함수
+    motor_msg.angle = float(angle)
+    motor_msg.speed = float(speed)
+    motor.publish(motor_msg)
+             
+def bezier(t, P0, P1, P2, P3):  # 베지에 곡선 함수
+    return (1 - t)**3 * P0 + 3*(1 - t)**2 * t * P1 + 3*(1 - t) * t**2 * P2 + t**3 * P3
+
+def bezier_visualization_loop():
+    global stop_visualization, latest_pose_x, latest_pose_z, latest_yaw_deg
+    global angle
+
+    pygame.init()
+    width, height = 800, 600
+    screen = pygame.display.set_mode((width, height))
+    pygame.display.set_caption("Bezier Curve Visualization")
+    clock = pygame.time.Clock()
+
+    def compute_control_points(P0, P3, theta0_deg, yaw_deg, d0=20, d1=30):
+        theta0 = np.deg2rad(theta0_deg)
+        theta1 = np.deg2rad(theta0_deg - yaw_deg)
+        P1 = P0 + d0 * np.array([np.cos(theta0), np.sin(theta0)])
+        P2 = P3 - d1 * np.array([np.cos(theta1), np.sin(theta1)])
+        return P1, P2, theta0, theta1
+
+    P0 = np.array([0.0, 0.0])
+    theta0_deg = 90
+    P3 = np.array([latest_pose_x, latest_pose_z])
+    P1, P2, theta0, theta1 = compute_control_points(P0, P3, theta0_deg, latest_yaw_deg)
+
+    offset_distance = -10
+    direction_vector = np.array([np.cos(theta1), np.sin(theta1)])
+    offset_point = P3 + offset_distance * direction_vector
+
+    ts = np.linspace(0, 1, 100)
+    curve = np.array([bezier(t, P0, P1, P2, offset_point) for t in ts])
+
+    # 전체 범위 계산 및 스케일링
+    all_x, all_y = curve[:, 0], curve[:, 1]
+    min_x, max_x = np.min(all_x), np.max(all_x)
+    min_y, max_y = np.min(all_y), np.max(all_y)
+
+    margin = 1.5
+    range_x, range_y = max_x - min_x, max_y - min_y
+    scale = min(width / (range_x * margin), height / (range_y * margin))
+
+    center_x = (min_x + max_x) / 2
+    center_y = (min_y + max_y) / 2
+
+    def world_to_screen(x, y):
+        sx = int(width / 2 + (x - center_x) * scale)
+        sy = int(height / 2 - (y - center_y) * scale)
+        return sx, sy
+
+    while not stop_visualization:
+        screen.fill((255, 255, 255))
+
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                stop_visualization = True
+
+        # 곡선 그리기
+        for i in range(len(curve) - 1):
+            start = world_to_screen(curve[i][0], curve[i][1])
+            end = world_to_screen(curve[i + 1][0], curve[i + 1][1])
+            pygame.draw.line(screen, (0, 0, 255), start, end, 2)
+
+        # 제어점 원 그리기
+        for point, color in zip([P0, P1, P2, P3], [(0, 255, 0), (255, 0, 0), (255, 0, 0), (255, 0, 255)]):
+            pygame.draw.circle(screen, color, world_to_screen(point[0], point[1]), 6)
+
+        # 시작점 방향 화살표 (진한 초록색)
+        p0_dir = P0 + 5 * np.array([np.cos(theta0), np.sin(theta0)])
+        pygame.draw.line(screen, (0, 150, 0), world_to_screen(*P0), world_to_screen(*p0_dir), 3)
+
+        # 도착점 방향 화살표 (보라색)
+        p3_dir = P3 + 5 * np.array([np.cos(theta1), np.sin(theta1)])
+        pygame.draw.line(screen, (255, 0, 255), world_to_screen(*P3), world_to_screen(*p3_dir), 3)
+
+        # 방향에 맞는 속이 빈 직사각형 그리기
+        rect_width = 3   # 진행 방향 길이 (world 단위)
+        rect_height = 5   # 수직 방향 길이
+        half_w = rect_width / 2
+        half_h = rect_height / 2
+        angle_rad = theta1  # 진행 방향
+
+        # 직사각형 꼭짓점 (중심 기준, 회전 전)
+        corners = np.array([
+            [-half_w, -half_h],
+            [ half_w, -half_h],
+            [ half_w,  half_h],
+            [-half_w,  half_h]
+        ])
+
+        # 회전 행렬 적용
+        rotation_matrix = np.array([
+            [np.cos(angle_rad), -np.sin(angle_rad)],
+            [np.sin(angle_rad),  np.cos(angle_rad)]
+        ])
+        rotated_corners = np.dot(corners, rotation_matrix)
+
+        # offset_point 기준으로 이동
+        world_corners = rotated_corners + offset_point
+
+        # 화면 좌표 변환
+        screen_corners = [world_to_screen(x, y) for x, y in world_corners]
+        pygame.draw.polygon(screen, (0, 0, 0), screen_corners, width=1)
+
+
+        # 회전 행렬 적용
+        rotation_matrix = np.array([
+            [np.cos(angle_rad), -np.sin(angle_rad)],
+            [np.sin(angle_rad),  np.cos(angle_rad)]
+        ])
+        rotated_corners = np.dot(corners, rotation_matrix)
+
+        # 중심 좌표 더하기
+        world_corners = rotated_corners + offset_point
+
+        # 화면 좌표로 변환
+        screen_corners = [world_to_screen(x, y) for x, y in world_corners]
+        pygame.draw.polygon(screen, (0, 0, 0), screen_corners, width=1)
+
+
+        # 궤적에서 가장 가까운 점 계산 및 조향 각도 설정
+        current_position = P3 - np.array([latest_pose_x, latest_pose_z])
+        distances = np.linalg.norm(curve - current_position, axis=1)
+        min_index = np.argmin(distances)
+        closest_point = curve[min_index]
+
+        # 조향 방향 표시 (노란 점)
+        pygame.draw.circle(screen, (255, 255, 0), world_to_screen(*closest_point), 6)
+
+        if closest_point[0] < current_position[0]:
+            angle = -50
+        else:
+            angle = 50
+
+        pygame.display.flip()
+        clock.tick(10)
+
+    pygame.quit()
+
+
+#=============================================
+# 실질적인 메인 함수 
+#=============================================
+
+
+def start():
+    global motor, image, ranges, latest_pose_x, latest_pose_z, latest_yaw_deg
+    global angle
+    print("Start program --------------")
+
+    #=========================================
+    # 노드를 생성하고, 구독/발행할 토픽들을 선언합니다.
+    #=========================================
+
+    rospy.init_node('Track_Driver')
+    rospy.Subscriber("/usb_cam/image_raw", Image, usbcam_callback, queue_size=1)
+    motor = rospy.Publisher('xycar_motor', XycarMotor, queue_size=1)
+
+    #=========================================
+    # 노드들로부터 첫번째 토픽들이 도착할 때까지 기다립니다.
+    #=========================================
+
+    rospy.wait_for_message("/usb_cam/image_raw", Image)
+    print("Camera Ready --------------")
+    print("======================================")
+    print(" S T A R T    D R I V I N G ...")
+    print("======================================")
+
+    #=========================================
+    # 메인 루프 
+    #=========================================
+    # ✅ Apriltag Detector 초기화
+    # 감지할 태그 옵션지정 "tag36h11"
+    options = apriltag.DetectorOptions(families="tag36h11")  
+    # 태그 검출 객체 생성
+    detector = apriltag.Detector(options)
+
+
+    # 초기화
+    angle = 0
+    speed = 5
+
+    #태그 크기(m)
+    tag_size=8
+
+    # distortion coefficients
+    dist_coeffs = np.array([-0.325278, 0.082082, 0.000997, -0.000955, 0.0])
+
+    # camera matrix
+    camera_matrix = np.array([
+    [371.42821, 0.0, 310.49805],
+    [0.0, 372.60371, 235.74201],
+    [0.0, 0.0, 1.0]
+    ])
+
+    # 3x4 Projection Matrix (예시)
+    P = np.array([
+    [262.19424, 0.,       307.58807, 0.],
+    [0.,        311.39255, 234.69525, 0.],
+    [0.,        0.,       1.,        0.]
+    ])
+    
+
+    # 카메라 파라미터 (fx, fy, cx, cy) (초점거리 좌표 / 센서 중앙 좌표)
+    camera_params = (371.42821, 372.60371, 310.49805, 235.74201)
+
+    # 시각화 스레드 시작
+    viz_thread = threading.Thread(target=bezier_visualization_loop)
+    viz_thread.start()
+    
+    while not rospy.is_shutdown(): # 메인 루프
+        if image.size == 0:
+            continue
+
+        # 왜곡 보정 undistorted = cv2.undistort(image, camera_matrix, dist_coeffs)
+        
+        # 흑백 변환
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+
+        # ✅ AprilTag 검출
+        detections = detector.detect(gray)
+
+
+        # ✅ 검출된 태그 시각화
+        # 감지된 태그들을 순회 / 해당 프로그램에서는 태그가 1개이므로 1번만 실행됨
+        for det in detections:                  
+            corners = det.corners.astype(int)   # 태크의 코너 좌표들을 int로 변환
+            for i in range(4):                  # 코너를 잇는 사각형 그리기
+                
+                # image 상에 n번째 점과 n+1번째 점을 잇는 선 그리기 녹색, 두께 2
+                cv2.line(image, tuple(corners[i]), tuple(corners[(i + 1) % 4]), (0, 255, 0), 2)
+
+            # 태그의 중심좌표를 반환
+            cx, cy = int(det.center[0]), int(det.center[1])
+            # 태그의 중심 좌표를 image 상에 출력
+            cv2.putText(image, f"center:{det.center.astype(int)}", (cx, cy), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+        
+
+            # pose는 거리, 방향에 대한 행렬, e0와 e1은 오차율 관련 정보임
+            pose, e0,e1 = detector.detection_pose(det,camera_params,tag_size)
+
+
+            # pose 행렬 구조  |R t|
+            #                 |0 1|
+            # pose는 4*4 행렬임
+            # R은 3*3의 회전 행렬
+            # t는 3*1 위치벡터
+
+
+            pose_t=pose[0:3,3]    # 회전 행령 데이터 슬라이스
+            pose_r=pose[0:3,0:3]  # 위치 벡터 데이터 슬라이스
+
+
+            # 거리계산 / 위치벡터의 norm을 구한것임
+            # L2 norm은 유클리드 노름으로 해당 벡터의 크기를 계산하는 것과 동치
+            distance = np.linalg.norm(pose_t)
+
+            
+            # 태그의 상대위치 출력 / 원점은 자동차인 것으로 보임
+            print(f"Position (x, y, z): {pose_t}")
+
+            #x좌표가 커지면 오른쪽으로 이동
+            #y좌표가 커지면 위아래로 이동
+            #z좌표가 커지면 앞으로 이동
+
+            # 계산한 거리 출력
+            print(f"Distance: {distance:.2f} m")   
+
+
+            # 회전 행렬 객체 생성
+            rot = R.from_matrix(pose_r)
+
+            # 객체에 대해 오일러 각을 z-y-x 순서로 도 단위로 반환
+            euler_angles = rot.as_euler('zyx', degrees=True)
+
+
+            # (yaw, pitch, roll) yaw만 필요하므로 나머지 버림
+            _, yaw, _ = euler_angles
+
+            # yaw 값 출력
+            print(f"Y축(Yaw): {yaw:.2f}°")
+
+            # 실시간 위치와 yaw 업데이트 (시각화용)
+            latest_pose_x = pose_t[0]
+            latest_pose_z = pose_t[2]
+            latest_yaw_deg = yaw
+
+
+        # ✅ image 출력
+        cv2.imshow("Camera View", image)
+
+        # 차량 제어
+        drive(angle, speed)
+
+        # Default 제어 명령, 추후에 삭제 예정인데 형식은 그대로 가져다 쓰자
+
+
+        # ==================[ 수정 끝  ]================== 
+        # 0.1초 delay
+        time.sleep(0.1)
+
+        
+        # 키보드 조작
+        cv2.waitKey(1)
+    global stop_visualization
+    stop_visualization = True
+    viz_thread.join()
+
+#=============================================
+# 메인함수를 호출합니다.
+# start() 함수가 실질적인 메인함수입니다.
+#=============================================
+
+if __name__ == '__main__':
+    start()
