@@ -6,18 +6,15 @@ import numpy as np
 import time  # 추가된 import
 from enum import Enum
 from ultralytics import YOLO
+import os
 
-
-model = YOLO('/root/xycar_ws/src/kookmin/driver/detector.pt')
-
-
+model = YOLO(os.path.join(os.path.dirname(__file__), "detector.pt"))
 
 class MissionType(Enum):
     IDLE = 0x01             # 최초 신호대기 state
     DRIVE = 0x02            # 차선 따라가기 state
     WAIT = 0x03             # 3초 그냥 직진하기
     RUBBERCONE = 0x04       # 라바콘 피하기 state
-
 
 class Detector:
     def __init__(self) -> None:
@@ -106,7 +103,7 @@ class Detector:
             return 0, 8   # 기본값
         else:  # IDLE
             return 0, 0   # 정지
-    
+
     def detect_green_light(self) -> bool:
         """
         YOLO 모델로 초록불 감지
