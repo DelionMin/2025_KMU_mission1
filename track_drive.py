@@ -19,19 +19,20 @@ import matplotlib.pyplot as plt
 # 커스텀 모듈 import 시작 ======================
 from detector import Detector, MissionType
 from mode_drive import Drive
+from mode_rubbercone import Rubbercone
 
-# from mode_rubbercone import Rubbercone
-# 완성 후 각주 해제 예정
-
-# from mode_bypass import Bypass
-# 완성 후 각주 해제 예정.. 이긴 한데 이게 필요할까?
-# 
 
 # 커스텀 모듈 import 끝   ======================
 
-
-
-
+class WAIT:
+    def __init__(self):
+        pass
+    
+    def get_value(self, image, ranges):
+        pass
+    
+    def step(self):
+        return 0, 20  # angle=0, speed=10
 
 #=============================================
 # 프로그램에서 사용할 변수, 저장공간 선언부
@@ -40,7 +41,7 @@ image = np.empty(shape=[0])  # 카메라 이미지를 담을 변수
 ranges = None  # 라이다 데이터를 담을 변수
 motor = None  # 모터노드
 motor_msg = XycarMotor()  # 모터 토픽 메시지
-Fix_Speed = 10  # 모터 속도 고정 상수값 
+Fix_Speed = 20  # 모터 속도 고정 상수값 
 new_angle = 0  # 모터 조향각 초기값
 new_speed = Fix_Speed  # 모터 속도 초기값
 bridge = CvBridge()  # OpenCV 함수를 사용하기 위한 브릿지 
@@ -132,8 +133,8 @@ def start():
     mission_mapping = {
         MissionType.IDLE: None,
         MissionType.DRIVE: Drive(),
-        # MissionType.RUBBERCONE: Rubbercone(),
-        # MissionType.BYPASS: Bypass(),
+        MissionType.WAIT: WAIT(),
+        MissionType.RUBBERCONE: Rubbercone(),   
     }
 
     detected_mission_prev = None
@@ -184,15 +185,6 @@ def start():
             detected_mission_prev = detected_mission
         # 탐지된 미션이 바뀔 때만 주행 클래스를 Instantiation 하기 위한 조건문
 
-
-        # DEBUGGING <Handling idle state>
-        if (time.time() - time_init < 20):
-            angle = 0
-            speed = 10
-        else:                     
-            mode_to_execute = mission_mapping[MissionType.DRIVE]
-        # DEBUGGING <Handling idle state>
-        # => IDLE state에 하드코딩 5초 직진 구현할려고 잠깐 만든 부분, 각주 없애고 써
 
         if mode_to_execute:
         # mode_to_excute가 None이 아닐 시 (=IDLE state가 아닐 시)
