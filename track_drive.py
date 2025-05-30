@@ -24,7 +24,8 @@ from mode_rubbercone import Rubbercone
 
 # 커스텀 모듈 import 끝   ======================
 
-class WAIT:
+# mode_drive 안정성을 위한 임시 state 정의 시작  ======================
+class Wait:
     def __init__(self):
         pass
     
@@ -33,6 +34,7 @@ class WAIT:
     
     def step(self):
         return 0, 20  # angle=0, speed=10
+# mode_drive 안정성을 위한 임시 state 정의 끝   ======================
 
 #=============================================
 # 프로그램에서 사용할 변수, 저장공간 선언부
@@ -117,7 +119,7 @@ def start():
     print("======================================")
 
 
-
+	
     #=========================================
     # 루프 전 프레임 관련 설정 
     #=========================================
@@ -133,7 +135,7 @@ def start():
     mission_mapping = {
         MissionType.IDLE: None,
         MissionType.DRIVE: Drive(),
-        MissionType.WAIT: WAIT(),
+        MissionType.WAIT: Wait(),
         MissionType.RUBBERCONE: Rubbercone(),   
     }
 
@@ -146,12 +148,7 @@ def start():
     speed = 0
     # IDLE state를 위한 초기화
 
-    # DEBUGGING <Handling idle state>
-    # time_init = time.time()
-    # DEBUGGING <Handling idle state>
-    # => IDLE state에 하드코딩 5초 직진 구현할려고 잠깐 만든 부분, 각주 없애고 써
-
-
+	
     while not rospy.is_shutdown():
 
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
@@ -174,11 +171,6 @@ def start():
         detected_mission = detector.detect_mission(image, ranges)
         # Detector method의 detector instance의 detect_mission 메소드로 미션 탐지
 
-        '''
-        < 추후 개선 플랜 >
-        IDLE state에서 DRIVE state로 천이된 다음 밑에 체커 무늬 제껴야 하니까
-        5초 직진 우선 때린 다음에 차선 무는 걸로 하자
-        '''
 
         if(detected_mission != detected_mission_prev):
             mode_to_execute = mission_mapping[detected_mission]
@@ -197,11 +189,6 @@ def start():
 
         drive(angle, speed)
         # 조향각, 속도로 실제 주행 수행
-
-
-        # drive(angle=0.0, speed=10.0)
-        # Default 제어 명령, 추후에 삭제 예정인데 형식은 그대로 가져다 쓰자
-        # drive(angle, speed) 형식으로 각 함수에서 가꾼 다음에 기기
 
         # ==================[ 수정 끝  ]================== 
         time.sleep(0.1)
