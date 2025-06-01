@@ -14,11 +14,11 @@ class Rubbercone:
         self._SPEED_SLOW = 7.0        # 저속 (매우 가까울 때)
         
         # Gap 탐색 파라미터 (더 공격적인 조향)
-        self._GAP_THRESH = 2.4      # gap 판단 기준을 더 엄격하게
-        self._STEER_SCALE = 4.0     # 기본 조향 강도를 대폭 증가
-        self._STEER_SCALE_HIGH = 2.5    # 고속일 때 조향 (안정성 고려)
+        self._GAP_THRESH = 2.4      # gap 판단 기준
+        self._STEER_SCALE = 4.0     # 기본 조향 강도
+        self._STEER_SCALE_HIGH = 2.5    # 고속일 때 조향 
         self._STEER_SCALE_MID = 4.0     # 중속일 때 조향
-        self._STEER_SCALE_SLOW = 5.0    # 저속일 때 조향 (더 공격적)
+        self._STEER_SCALE_SLOW = 5.0    # 저속일 때 조향 
         
         # 이미지, 라이다 저장
         self._image = None
