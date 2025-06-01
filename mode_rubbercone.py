@@ -7,13 +7,13 @@ class Rubbercone:
         self._DIST_THRESHOLD_MID = 6.0    # 6-10m: 중간속도  
         self._DIST_THRESHOLD_NEAR = 3.0   # 3-6m: 저속
         
-        # 속도 설정 (매우 공격적으로)
+        # 속도 설정 
         self._SPEED_MAX = 20        # 최고속도 (장애물 멀 때)
         self._SPEED_HIGH = 15       # 고속 (중간거리)
         self._SPEED_MID = 10        # 중속 (가까운 거리)
         self._SPEED_SLOW = 7.0        # 저속 (매우 가까울 때)
         
-        # Gap 탐색 파라미터 (더 공격적인 조향)
+        # Gap 탐색 파라미터 
         self._GAP_THRESH = 2.4      # gap 판단 기준
         self._STEER_SCALE = 4.0     # 기본 조향 강도
         self._STEER_SCALE_HIGH = 2.5    # 고속일 때 조향 
@@ -60,7 +60,7 @@ class Rubbercone:
             # 10m 이상: 최고속도 직진
             return 0, self._SPEED_MAX
         elif dist_min > self._DIST_THRESHOLD_MID:
-            # 6-10m: 고속 직진 (약간의 조향 허용)
+            # 6-10m: 고속 직진 
             gap_idx = self._find_largest_gap(front_ranges)
             angle = (gap_idx - 89) * self._STEER_SCALE_HIGH  # 고속용 조향각도
             return angle, self._SPEED_HIGH
@@ -86,7 +86,7 @@ class Rubbercone:
         left_segment = self._ranges[self._left_indices]   # [89->0] 순서
         right_segment = self._ranges[self._right_indices] # [359->270] 순서
         
-        # concatenate로 합치기 (더 빠름)
+        # concatenate로 합치기 
         front_ranges = np.concatenate([left_segment, right_segment])
         return front_ranges
     
