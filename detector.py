@@ -13,7 +13,7 @@ model = YOLO(os.path.join(os.path.dirname(__file__), "detector.pt"))
 class MissionType(Enum):
     IDLE = 0x01             # 최초 신호대기 state
     DRIVE = 0x02            # 차선 따라가기 state
-    WAIT = 0x03             # 3초 그냥 직진하기
+    WAIT = 0x03             # 차선 주행 안정화를 위한 임시 state
     RUBBERCONE = 0x04       # 라바콘 피하기 state
 
 class Detector:
@@ -28,10 +28,10 @@ class Detector:
         
         # Detection 임계값 설정
         self.confidence_threshold = 0.5  # YOLO 신뢰도 임계값
-        self.distance_threshold = 2.0    # 라이다 거리 임계값 (미터)
+        self.distance_threshold = 2.0    # 라이다 거리 임계값
         self.escape_point_threshold = 10 # 탈출 조건을 위한 라이다 포인트 개수 임계값
         
-        # 클래스 ID 매핑 (detector.pt 모델에 따라 조정 필요)
+        # 클래스 ID 매핑 
         self.class_names = {
             'signal_GREEN': 0,
             'rubbercone': 1, 
