@@ -56,16 +56,15 @@ class Detector:
         # ===================[ 위 조건문은 최초 시작 분기 ]===================
 
         elif self._mission_state == MissionType.WAIT:
-            # 4초 직진으로 체커 무늬 피하기
+            # 차선 주행 안정화를 위한 임시 WAIT 상태 진입
             if self._wait_start_time is None:
                 self._wait_start_time = time.time()
                 
             elapsed_time = time.time() - self._wait_start_time
             if elapsed_time < self._wait_duration:
                 self._mission_state = MissionType.WAIT
-                # 4초 직진 진행 중
-
-                # 여기서 angle=0, speed=10 제어는 상위 레벨에서 처리
+                # 임시 상태 4초동안만 실행
+            
             else:
                 # 4초 경과 후 DRIVE 상태로 전환
                 self._mission_state = MissionType.DRIVE
@@ -75,7 +74,7 @@ class Detector:
         elif self._mission_state == MissionType.DRIVE:
             # 차선 주행 상황
             if self.detect_rubbercone():
-                # 라바콘 피하기 탐지 시
+                # 라바콘 상태로 전환
                 self._mission_state = MissionType.RUBBERCONE
                 print("Rubbercone detected! Transitioning to RUBBERCONE state")
                 
@@ -94,13 +93,13 @@ class Detector:
         현재 상태에 따른 제어값 반환 (angle, speed)
         """
         if self._mission_state == MissionType.WAIT:
-            return 0, 10  # 직진, 속도 10
+            return 0, 20  # 직진, 속도 20
         elif self._mission_state == MissionType.DRIVE:
-            # 차선 추종 로직 (별도 구현 필요)
-            return 0, 15  # 기본값
+            # 차선 추종 로직 
+            return 0, 20  # 기본값
         elif self._mission_state == MissionType.RUBBERCONE:
-            # 라바콘 회피 로직 (별도 구현 필요)
-            return 0, 8   # 기본값
+            # 라바콘 회피 로직 
+            return 0, 20   # 기본값
         else:  # IDLE
             return 0, 0   # 정지
 
@@ -235,29 +234,3 @@ class Detector:
         self._wait_start_time = None
         print("Detector state reset to IDLE")
 
-# 사용 예시
-if __name__ == "__main__":
-    detector = Detector()
-    
-    # 카메라와 라이다 데이터 시뮬레이션 (실제 사용시에는 실제 데이터로 교체)
-    # image = cv2.imread('test_image.jpg')  # 실제 카메라 이미지
-    # ranges = np.array([1.5, 2.0, 1.8, 3.0, 2.5])  # 실제 라이다 데이터
-    
-    # 사용 예시:
-    # while True:
-    #     # 센서 데이터 받기
-    #     image = get_camera_image()  # 구현 필요
-    #     ranges = get_lidar_data()   # 구현 필요
-    #     
-    #     # 미션 상태 업데이트
-    #     mission_type = detector.detect_mission(image, ranges)
-    #     
-    #     # 제어값 계산
-    #     angle, speed = detector.get_control_values()
-    #     
-    #     # 차량 제어
-    #     control_vehicle(angle, speed)  # 구현 필요
-    #     
-    #     print(f"Current mission: {mission_type}, Control: angle={angle}, speed={speed}")
-    
-    print("Detector initialized successfully!")
