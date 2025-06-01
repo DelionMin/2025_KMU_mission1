@@ -234,3 +234,5 @@ class Detector:
         self._wait_start_time = None
         print("Detector state reset to IDLE")
 
+    if __name__ == "__main__":
+    detector = Detector()
