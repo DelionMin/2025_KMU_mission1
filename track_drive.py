@@ -24,7 +24,6 @@ from mode_rubbercone import Rubbercone
 
 # 커스텀 모듈 import 끝   ======================
 
-# mode_drive 안정성을 위한 임시 state 정의 시작  ======================
 class Wait:
     def __init__(self):
         pass
@@ -33,8 +32,7 @@ class Wait:
         pass
     
     def step(self):
-        return 0, 20  # angle=0, speed=10
-# mode_drive 안정성을 위한 임시 state 정의 끝   ======================
+        return 0, 45  # angle=0, speed=45
 
 #=============================================
 # 프로그램에서 사용할 변수, 저장공간 선언부
@@ -51,12 +49,13 @@ bridge = CvBridge()  # OpenCV 함수를 사용하기 위한 브릿지
 #=============================================
 # 라이다 스캔정보로 그림을 그리기 위한 변수
 #=============================================
+'''
 fig, ax = plt.subplots(figsize=(8, 8))
 ax.set_xlim(-120, 120)
 ax.set_ylim(-120, 120)
 ax.set_aspect('equal')
 lidar_points, = ax.plot([], [], 'bo')
-
+'''
 #=============================================
 # 콜백함수 - 카메라 토픽을 처리하는 콜백함수
 #=============================================
@@ -66,7 +65,6 @@ def usbcam_callback(data):
     
     # image 기본 인코딩 bgr
    
-
 #=============================================
 # 콜백함수 - 라이다 토픽을 받아서 처리하는 콜백함수
 #=============================================
@@ -119,7 +117,6 @@ def start():
     print("======================================")
 
 
-	
     #=========================================
     # 루프 전 프레임 관련 설정 
     #=========================================
@@ -148,35 +145,15 @@ def start():
     speed = 0
     # IDLE state를 위한 초기화
 
-	
     while not rospy.is_shutdown():
-
-        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-        cv2.imshow("original", image)
-        cv2.imshow("gray", gray)
-        # 현재 들어오고 있는 카메라 이미지 출력 창 띄우기
-
-        if ranges is not None:  
-            angles = np.linspace(0,2*np.pi, len(ranges))+np.pi/2
-            x = ranges * np.cos(angles)
-            y = ranges * np.sin(angles)
-
-            lidar_points.set_data(x, y)
-            fig.canvas.draw_idle()
-            plt.pause(0.01)
-        # 라이다 출력 창 띄우기
-
-        # ==================[ 수정 시작 ]================== 
 
         detected_mission = detector.detect_mission(image, ranges)
         # Detector method의 detector instance의 detect_mission 메소드로 미션 탐지
-
-
+        
         if(detected_mission != detected_mission_prev):
             mode_to_execute = mission_mapping[detected_mission]
             detected_mission_prev = detected_mission
         # 탐지된 미션이 바뀔 때만 주행 클래스를 Instantiation 하기 위한 조건문
-
 
         if mode_to_execute:
         # mode_to_excute가 None이 아닐 시 (=IDLE state가 아닐 시)
@@ -186,11 +163,9 @@ def start():
             angle, speed = mode_to_execute.step()
             # 조향각, 속도 결정
 
-
         drive(angle, speed)
         # 조향각, 속도로 실제 주행 수행
 
-        # ==================[ 수정 끝  ]================== 
         time.sleep(0.1)
         
         cv2.waitKey(1)
