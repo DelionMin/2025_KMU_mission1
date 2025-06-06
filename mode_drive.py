@@ -6,6 +6,7 @@ import numpy as np
 import cv2
 from math import inf
 from ultralytics import YOLO
+from collections import deque
 
 # 이 코드(class)는 step함수에서 다음과 같이 동작한다.
 # 1. 이미지(카메라 데이터)와 class 내의 state를 기반으로 차선의 위치를 알아낸다.
@@ -30,9 +31,9 @@ class Drive:
 
     class Angle_change(Enum):
         INIT = 0
-        DRIVE_STATE_START = 60
+        DRIVE_STATE_START = 3
         DRIVE_STATE_STRAIGHT = 0
-        DRIVE_STATE_END = -60
+        DRIVE_STATE_END = -10
         # START, END의 부호는 반대
 
     class Class_YOLO(Enum):
@@ -63,8 +64,8 @@ class Drive:
         self._camera_height = 480  # 너비 픽셀 수
         # 연산량을 줄이기 위해 이미지를 줄였을 때의 크기를 나타내는 상수
         # 이때 원본 이미지 크기의 높이와 너비에 비해 각각 8배 작다.
-        self._camera_width_s = self._camera_width // 8  # 높이 픽셀 수
-        self._camera_height_s = self._camera_height // 8  # 너비 픽셀 수
+        self._camera_width_s = self._camera_width // 8  # 너비 픽셀 수 (=80)
+        self._camera_height_s = self._camera_height // 8  # 높이 픽셀 수 (=60)
 
         # perspective matrix 생성
         self._persptrans_matrix = self.__get_persptrans_matrix()
@@ -74,7 +75,9 @@ class Drive:
         # base line ratio는 기준선을 화면의 어느 지점으로 정할지를 결정하는 비율이다.
         # 0.8이면, 이미지의 높이가 1일 때 0.2의 높이를 가지는 선이 기준선이 되는 것이다.
         self._base_line_ratio = 0.8
+        self._base_line_ratio_farther = 0.4
         self._base_line_position = int(self._camera_height_s * self._base_line_ratio)
+        self._base_line_position_farther = int(self._camera_height_s * self._base_line_ratio_farther)
 
         ### 차선 판단 관련 상수 ###
         # base line정보의 길이 설정
@@ -90,7 +93,7 @@ class Drive:
         # 스테이트를 저장하는 변수의 초기값 설정
         self._state = self.State.DRIVE_STATE_NONE
         # 일반적인 차선의 폭 설정
-        self._lane_width = 40
+        self._lane_width = 36
         # 차선 폭의 최솟값 설정
         self._lane_width_min = 12
         # 점수 임계치가 가지는 하한선 설정
@@ -102,6 +105,23 @@ class Drive:
         self._curve_decel = 5
 
         # ================== [ 영상 처리 관련 변수 끝 ] ==================
+        
+
+        # ================= ANGLE PID =================
+        self._angle_prev = 0
+        self._angle_i_term = 0
+
+        self._dt = 0.1
+
+        # DEBUGGING
+        # I term은 제거해도 될 듯
+        # DEBUGGING
+
+
+        self._K_p = 0.1
+        self._K_i = 0
+        self._K_d = 0.9
+        # ================= ANGLE PID =================
 
         self._yellow_sensitivity = 5
         # HSV 내 노란색 H값 범위
@@ -127,23 +147,94 @@ class Drive:
 
         self._state_change = self.State_change.INIT
 
-
-        self._time_init_change = None
-        # __change_lane 타임스탬프
-        
-        self.unit_duration_change = None
-        # __change_lane 관련해서 start, staright, end (1:3:1) 시간 비율 맞춰줄 때 unit duration
-
-        self._dist_car_pixel = 220
+        self._dist_car_pixel = 60
         # TO BE TUNED
         # 차선 변경 START state에서 카메라 앵글 중심점 x좌표와 차량 위치 비교용 threshold
    
-        self._ROI_width_YOLO = 30
+        self._ROI_width_YOLO = 60
         # 차선 변경 알고리즘 내 YOLO ROI
+
+        self._speed_change = 45
+        self._speed_straight = 70
+        # 차량 변경 속도
+
+        self._ROI_car_detected = False
+        # 차선 변경 시 ROI 내 차량 확인 여부 분기 
+
+
+        self._car_detection_initialized = False
+        # car_detection 가까이서 볼 수 있도록
+
+        self._car_detection_size_threshold = 1000
+        # car_detection 차량 이미지 크기 threshold
+
+
+        self._change_angle_factor = 0.2
+
+        self._target_cls_id = None
+        # START_STATE에서 차량 종류 기억
+
+        self.BYPASS_SAFETY_DISTANCE = 17.5
+        # 추월 시 가속 안전거리
+
+        self.angle_change_prev = 0
+        # 차선 변경PD 제어
+
+
+
+
+
+        self._lane_stabilized = True
+        # 차선 변경 후 차선 추종 알고리즘 안정화 여부 flag
+
+        self._stabilizing_factor = 0
+        # 0일 시 그냥 삭제
+        # 일반적으로 차선 한 쪽만 감지시 넣는 _lane_width에 안정화를 위해 더해주는 가중치
+
+        self._stabilizer = self._lane_width + self._stabilizing_factor
+        # 차선 변경 시 차선 추종 안정화를 위해 좌측 차선 측정 위치에 더해주는 조향 보조 상수
+
+        self._grip_margin = 8
+        # grip 차선 범위 margin
+
+        self._bypass_initialized = False
+        # bypass 찾기 시작
+
+        self._target_lane_detected = False
+        # 차선 변경 시 반대쪽 흰 차선 감지 여부
+
+        self._grip_left_prev = 0
+        self._grip_right_prev = self._camera_width_s
+        # grip 차선 튐 방지
+
+
+        self._bird_eye_view = None
+        # Bird eye view로 차선 정렬 확인, _pos에 먹어주는 비례 상수 낮추기
+
+        self._alignment_ok = False
+        # 차선 정렬 여부 플래그
+
+        self._flag_speed_straight = False
+        # 속도 변경 플래그
+
+
+        # ============================================================
+        # pos를 저장할 큐 (크기 20)
+        self._pos_history = deque(maxlen=20)
+        
+        # 곡률 계산 관련 상수
+        self._curv_threshold_low = 0.01   # 직선 구간 판단 임계값
+        # TO BE TUNED
+        self._curv_threshold_high = 0.05  # 급커브 판단 임계값
+        self._speed_straight = 45.0           # 직선 구간 속도
+        self._speed_curve = 35.0              # 커브 구간 속도
+        self._speed_sharp_curve = 30.0        # 급커브 구간 속도
+        # ============================================================
+
 
 
         # Logging
-        self._enable_logging = True
+        self._enable_logging = False
 
     def get_value(self, image, ranges):
         # 센서 값 받아오기 위한 메소드
@@ -182,8 +273,8 @@ class Drive:
         # 이미지에서 도로의 소실점 y값. 이때 y값은 아래로 가면서 증가한다.
         road_vanish_y = 240
         # 아래는 _get_persptrans_matrix 함수의 설명 참고.
-        road_margin_x = 320
-        road_margin_y = 280  # 소실점보다 아래에 있는 적당한 y값
+        road_margin_x = 400
+        road_margin_y = 300  # 소실점보다 아래에 있는 적당한 y값
 
         # 마름모 왼쪽 변 기울기를 구한다.(dy/dx)가 기울기가 된다.
         dx = self._camera_width / 2 + road_margin_x
@@ -223,9 +314,6 @@ class Drive:
         -> 01000,00010,00000,10000
         """
 
-        # 20250512 수정할 사항
-        # image가 노란색 차선도 인식할 수 있도록 바꾸기 HSV 색 공부
-
         # perspective transform : 항공뷰 구하기
         img = cv2.warpPerspective(
             image,
@@ -249,7 +337,6 @@ class Drive:
         upper_white = np.array([255, self._white_sensitivity, 255])
         img_white = cv2.inRange(img_hsv, lower_white, upper_white)
 
-
         '''
         일단 img_white_yellow 만들어 보고 logging 한 다음에 baseline 찍어내보자
         H -> 0 ~ 360 (R: 0, G: 120, B: 240)
@@ -267,12 +354,13 @@ class Drive:
         img_yellow = cv2.inRange(img_hsv, lower_yellow, upper_yellow)
 
 
-        # 기준선(base line)위에서 차선이 존재하는 위치만 1이다.
         base_line_white = img_white[self._base_line_position, :]
         base_line_yellow = img_yellow[self._base_line_position, :]
 
 
         self._logging(img_original=img_white + img_yellow)
+
+        self._bird_eye_view = img_white + img_yellow
 
 
         # 일단 잡힌 차선들 모두 다 출력
@@ -286,13 +374,17 @@ class Drive:
         # lane 정보를 기준선과 함께 화면에 띄운다.
         img_lane = img_original.copy()  #
         img_lane = cv2.cvtColor(img_lane, cv2.COLOR_GRAY2BGR)
+
+        
+
         img_lane = cv2.line(
-            img_lane,
-            (0, self._base_line_position),
-            (self._camera_width_s - 1, self._base_line_position),
-            (0, 255, 0),
-            1,
+        img_lane,
+        (0, self._base_line_position),
+        (self._camera_width_s - 1, self._base_line_position),
+        (0, 255, 0),
+        1,
         )
+
         img_lane = cv2.line(
             img_lane,
             (self._pos_l, self._base_line_position),
@@ -307,6 +399,7 @@ class Drive:
             (255, 0, 0),
             1,
         )
+
         img_lane = cv2.resize(
             img_lane,
             dsize=(self._camera_width, self._camera_height),
@@ -330,6 +423,11 @@ class Drive:
         score_l, pos_l = -inf, None
         score_r, pos_r = -inf, None
 
+
+        flag_angle_stabilized = False
+        # stabilizer 탈출 분기
+
+
         # positions 리스트(또는 np.array)를 순회하여 가장 점수가 큰 위치 결정
         for pos, valid in enumerate(positions):
         # pos -> position의 index , valid -> 내부 값
@@ -352,10 +450,14 @@ class Drive:
         detect_l = score_l > self._score_bound_min
         detect_r = score_r > self._score_bound_min
 
+        _flag_both_lanes_detected = False
+        # stabilized 판단 시 양 쪽 차선 모두 관측 되는지 여부 flag
+
         # 차선 결정
         if detect_l:
             # 경우 1: 왼쪽과 오른쪽 차선 둘 다 검출됐을 때
             if detect_r:
+                _flag_both_lanes_detected = True
                 # 두 차선이 너무 가깝거나, 역전됐을 때
                 if (pos_r - pos_l) < self._lane_width_min:
                     if score_l > score_r:
@@ -386,7 +488,8 @@ class Drive:
         self._pos_r = pos_r
         # get position
         self._pos = pos_l + pos_r - self._base_line_data_length
-
+        
+        
         # Update State
         if self._pos < -self._center_range:
             self._state = self.State.DRIVE_STATE_LEFT
@@ -400,8 +503,143 @@ class Drive:
         else:
             self._score_bound_min = -24
 
-        angle = self._p_con_p * self._pos
-        return angle
+
+        if not self._lane_stabilized:
+            # 차선 변경 시 감도 하락 해결 대책
+            angle = 0
+            pos_lane_array = np.where(positions == 255)
+
+            if pos_lane_array[0].size > 0:
+
+                if self._change_to_the_left:
+                    # 좌측 차선으로 차선 변경
+                    grip_left_array = pos_lane_array[0]
+
+                    if grip_left_array.size > 0:
+                        grip_left = min(grip_left_array)
+
+                        if abs(grip_left - self._grip_left_prev) > (self._camera_width_s // 4):
+                        # 좌측 차선 날라가고 추측 차선으로 뛸 때 (threshold 튜닝 필요)
+                        # DEBUGGING <각주 말 닦기>
+                            angle = 5 
+
+                        self._grip_left_prev = grip_left
+                        self._pos = grip_left + grip_left + self._stabilizer - self._base_line_data_length
+                        # DEBUGGING
+                        # <self._pos 업데이트 하도록 수정해봄>
+                        # DEBUGGING
+
+
+                        angle = self._p_con_p * (self._pos)    
+                        
+                        # COMMENTED RECORDING
+                        # print("grip_left: ", grip_left)
+                        # print("grip_right_approx: ", grip_left + self._stabilizer)
+                        # print("grip left angle: ", angle)                    
+                else:
+                    # 우측 차선으로 차선 변경 
+                    grip_right_array = pos_lane_array[0]
+
+                    if grip_right_array.size > 0:
+                        grip_right = max(grip_right_array)
+
+                        if abs(grip_right - self._grip_right_prev) > (self._camera_width_s // 4):
+                        # 좌측 차선 날라가고 추측 차선으로 뛸 때 (threshold 튜닝 필요)
+                        # DEBUGGING <각주 말 닦기>
+                            angle = 5 
+
+                        self._grip_right_prev = grip_right
+                        self._pos = grip_right + grip_right - self._stabilizer - self._base_line_data_length
+                        # DEBUGGING
+                        # <self._pos 업데이트 하도록 수정해봄>
+                        # DEBUGGING
+
+                        angle = self._p_con_p * (self._pos) 
+
+                        # COMMENTED RECORDING
+                        # print("grip right angle: ", angle)
+            
+
+            # < 분기 조건 후보 2 >
+            if not self._alignment_ok and not self._lane_stabilized and self.__lanes_aligned() :
+                self._alignment_ok = True
+            
+            if self._alignment_ok:
+                if angle > 2:
+                    angle = 2
+                else:
+                    angle / 2
+
+                if angle < 0.1:
+                    self._lane_stabilized = True
+                    self._flag_speed_straight = True
+                    
+                    # COMMENTED RECORDING
+                    # print("LANE STABILIZED")
+                    
+            '''
+            # if(self._state == self.State.DRIVE_STATE_NONE and _flag_both_lanes_detected):
+            # < 분기 조건 후보 1 -> 잘 동작은 X > 
+                print("LANE STABILIZED")
+                angle = 0
+                self._angle_prev = 0
+                self._lane_stabilized = True
+            '''
+            
+        else:
+            angle = self._p_con_p * self._pos
+
+        # ===================== 곡률 계산용 deque append =====================
+        self._pos_history.append(self._pos)
+        # ===================== 곡률 계산용 deque append =====================
+
+        if self._lane_stabilized:
+
+            # PID IMPLEMENTATION TRIAL
+
+            self._angle_i_term = self._angle_i_term + (angle * self._dt)
+            angle_d_term = angle - self._angle_prev 
+
+            # COMMENTED RECORDING
+            # print("angle_before_PD: ", angle)
+
+            angle = self._K_p * angle \
+                    + self._K_i * self._angle_i_term \
+                    + self._K_d * angle_d_term
+            
+            # COMMENTED RECORDING
+            # print("angle_after_PD: ", angle)
+
+            # DEBUGGING <여기 아니면 return 직전>
+            #self._angle_prev = angle
+            # DEBUGGING
+            
+            # PID IMPLEMENTATION TRIAL
+
+        ranges = self._ranges
+        left_ranges = ranges[0:89]
+        min_left_ranges = min(left_ranges)
+        
+        right_ranges = ranges[270:355]
+        min_right_ranges = min(right_ranges)
+
+        if min_left_ranges < 1 or min_right_ranges < 1:
+        # 차선 변경 시 안전 거리 확보 목적
+            print("CAUTION! ABOUT TO CRASH")
+
+            if min_left_ranges < 1:
+                angle = 20
+                print("TO THE RIGHT")
+            else:
+                angle = -20   
+                print("TO THE LEFT")       
+        
+        # DEBUGGING <여기 아니면 return 직전>
+        self._angle_prev = angle
+        # DEBUGGING <여기 아니면 return 직전>
+
+        return angle       
+
 
     def __choose_lane_init(self):
         # 차선 변경 절차 수행 후 다시 레인을 따라가기 위한 연산
@@ -414,6 +652,8 @@ class Drive:
         self._pos = 0
         # 점수 임계치가 가지는 하한선 설정
         self._score_bound_min = -24
+        # state
+        self._state = self.State.DRIVE_STATE_NONE
 
     def __change_lane(self, lane_white, lane_yellow):
         
@@ -434,172 +674,130 @@ class Drive:
         # 1. 분기 탈출
         # 2. self.__choose_lane_init()
 
+        ranges = self._ranges
+
         if (self._state_change == self.State_change.INIT):
-            self._time_init_change = time.time()
-            # 타임스탬프
 
             pos_white_array = np.where(lane_white == 255)
 
-            if pos_white_array:
+            if pos_white_array[0].size > 0:
                 # pos_white_array이 비지 않았을 때
                 lane_white_mean = np.array(pos_white_array).mean()
                 pos_current = self._base_line_data_length / 2
-                # 현재 차량 위치 (프레임 상)
-
-                #DEBUGGING
-                print("lane_white_mean: ", lane_white_mean)
-                print("pos_current: ", pos_current)
-                #DEBUGGING            
+                # 현재 차량 위치 (프레임 상)         
 
                 if (lane_white_mean < pos_current):
                     self._change_to_the_left = False
+                    # COMMENTED RECORDING
+                    # print("change to the right")
                     # 차량 변경 방향 판정
                 else:
                     self._change_to_the_left = True
+                    # COMMENTED RECORDING
+                    # print("change to the left")
             
                 self._state_change = self.State_change.DRIVE_STATE_START
 
+            speed = self._speed_change
+            # speed 초기화
             angle = 0
-            # angle에 아무 값
+            # angle 초기화
 
         elif(self._state_change == self.State_change.DRIVE_STATE_START):
-
+            
+            speed = self._speed_change
             angle = self.Angle_change.DRIVE_STATE_START.value
             # speed 바꿀거면 어케저케.. step도 수정하고 해야된다
 
-            time_elapsed = time.time() - self._time_init_change
-
-            output_yolo = self.result_yolo
-
-            car_size_bigger = 0
-            # 차량 여러 개 입력 시 대비용 차량 bounding box 크기 temp
-
-            sign = 1
-
-            for box in output_yolo[0].boxes:
-                x1, y1, x2, y2 = box.xyxy[0].tolist()
-
-                center_x = (x1 + x2) // 2
-                center_y = (y1 + y2) // 2
-
-                car_size = abs(x1 - x2) * abs(y1 - y2)
-
-                if car_size > car_size_bigger:
-                    car_size_bigger = car_size
-                    cls_car_bigger = int(box.cls[0].item())
-                    center_x_bigger = center_x
-                    center_y_bigger = center_y
-
-            # DEBUGGING
-            print(f"Class: {cls_car_bigger}")
-            print("Center_x: ", center_x_bigger, "Center_y: " , center_y_bigger)
-            # DEBUGGING
-                
-            # TO BE OPTIMALIZED
-            if (self._change_to_the_left):
-                if (center_x_bigger > (self._camera_width // 2 + self._dist_car_pixel)):
-                    self._state_change = self.State_change.DRIVE_STATE_STRAIGHT
-                    self.unit_duration_change = time_elapsed                        
+            if self._change_to_the_left:
+                ranges_right = ranges[270:359]
+                min_ranges_right = min(ranges_right)
+                if min_ranges_right > 20:
+                    min_ranges_right = 20
+                angle = 5 + (20 - min_ranges_right) / 2
+                # COMMENTED RECORDING
+                # print("changing to the left angle: ", -1 * angle)
             else:
-                if (center_x_bigger < (self._camera_width // 2 - self._dist_car_pixel)):
-                    self._state_change = self.State_change.DRIVE_STATE_STRAIGHT
-                    self.unit_duration_change = time_elapsed  
-            # 이미지 구도 상 앞 차량이 특정 위치에 도달 시
-            # TO BE OPTIMALIZED
+                ranges_left = ranges[0:90]
+                min_ranges_left = min(ranges_left)
+                if min_ranges_left > 20:
+                    min_ranges_left = 20
+                angle = 5 + (20 - min_ranges_left) / 2
+                # COMMENTED RECORDING
+                # print("changing to the right angle: ", angle)
 
-            # State 천이
+            pos_white_array = np.where(lane_white == 255)
 
-            #DEBUGGING
-            print("STATE_START")
-            print("time_elapsed:", time_elapsed)
-            #DEBUGGING
+            if pos_white_array[0].size > 0:
+                
+                if self._change_to_the_left:
+                    
+                    # 왼쪽 구역에 차선 감지 된 거 있으면 탈출 flag 하나 세우기
+                    # 오른쪽 차선만 보는 거 방지 안전 장치
 
-        elif(self._state_change == self.State_change.DRIVE_STATE_STRAIGHT):
+                    pos_white_left = min(pos_white_array[0])
 
-            angle = 0
+                    if(pos_white_left < (self._camera_width_s // 2)):
+                        self._target_lane_detected = True
+                    
+                    if (pos_white_left > 0 and self._target_lane_detected):
+                        self._state_change = self.State_change.DRIVE_STATE_END
+                        self._target_lane_detected = False
 
-            time_elapsed = time.time() - self._time_init_change
+                else:
+                    pos_white_right = max(pos_white_array[0])
 
-            if (time_elapsed > (1.5 * self.unit_duration_change)):
-                self._state_change = self.State_change.DRIVE_STATE_END
-                self._time_init_change = time.time()
-                # 타임스탬프
+                    if(pos_white_right > (self._camera_width_s // 2)):
+                        self._target_lane_detected = True
 
-                # State 천이
+                    if (pos_white_right < self._camera_width_s and self._target_lane_detected):
+                        self._state_change = self.State_change.DRIVE_STATE_END
+                        self._target_lane_detected = False
 
-            #DEBUGGING
-            print("STATE_STRAIGHT")
-            print("time_elapsed:", time_elapsed)
-            #DEBUGGING
+                    # State 천이
 
         elif(self._state_change == self.State_change.DRIVE_STATE_END):
 
-            angle = self.Angle_change.DRIVE_STATE_END.value
+            self._flag_change_lane = False
+            self._lane_stabilized = False
+            # 차선 변경 후 차선 추종 알고리즘 안정화 분기 플래그
+            self._state_change = self.State_change.INIT
+            self._alignment_ok = False
 
-            time_elapsed = time.time() - self._time_init_change
-
-            if (time_elapsed > self.unit_duration_change):
-                self._flag_change_lane = False
-                self._state_change = self.State_change.INIT
-                self.__choose_lane_init()
-                angle = 0
-                # State 천이
-
-            #DEBUGGING
-            print("STATE_END")
-            print("time_elapsed:", time_elapsed)
-            #DEBUGGING
+            angle = 0
+            speed = self._speed_change
+            # 초기화
 
         if (self._change_to_the_left):
             angle = angle * (-1)
         # 차선 변경 방향 맞춰주기
+        
+        self._angle_prev = angle
 
-        # DEBUGGING
-        print("angle: ", angle)
-        print("self._change_to_the_left: ", self._change_to_the_left)
-        print("============================")
-        # DEBUGGING 
-
-
-        '''
-        < 수정 방안 >
-        덜 Hard-coding 스럽게 만들기
-        => 라이다 safety distance에 맞게 비례하도록 이미지 상 좌표 정하고 그 좌표 범위까지 차량이 이동했을 때까지 시간 재기
-
-        ---------------------------               ---------------------------
-        |                         |               |                         | 
-        |          ----           |               |    ----                 |
-        |          |  |           |       =>      |    |  |                 |
-        |          ----           |               |    ----                 |
-        |                         |               |                         |
-        ---------------------------               ---------------------------
-
-        (차량 우측 조향)
-
-
-        => empirical 하게 봤을 때 speed 일정하면 START => STRAIGHT => END 시간 비율이 1 : 3 : 1 정도면 충분
-        => 그래서 START일 때 시간 재서 각 STATE DURATION을 T : 3T : T로 하기
-        '''
-
-
-        return angle
+        return angle, speed
     
     def _YOLO_step(self):
         image = self._image
         self.result_yolo = self.yolo_model(image, verbose=False)
         image_YOLO_plot = self.result_yolo[0].plot()
-        cv2.imshow("YOLO", image_YOLO_plot)
+        
+        # cv2.imshow("YOLO", image_YOLO_plot)
         # YOLO 이미지 띄우기
 
     def car_detected(self):
         result_yolo = self.result_yolo
         ranges = self._ranges
 
-        LIDAR_SAFETY_DISTANCE = 20
+        LIDAR_SAFETY_DISTANCE = self.BYPASS_SAFETY_DISTANCE
+        if (not self._car_detection_initialized):
+            LIDAR_SAFETY_DISTANCE = 10
+            # 최초 차선 변경 지점 도입 안전거리
+            # DEBUGGING <굳이 flag 해야 하나?>
+
         _flag_car_detected = False
         # YOLO 결과 차량이 인식되었는지 flag
 
-        ranges_ROI = np.concatenate([ranges[0:10], ranges[350:360]])
+        ranges_ROI = np.concatenate([ranges[0:5], ranges[355:360]])
 
         min_ROI = np.min(ranges_ROI)
 
@@ -609,48 +807,143 @@ class Drive:
                 cls_id = int(box.cls[0].item())
                 x1, y1, x2, y2 = box.xyxy[0].tolist()
 
-                center_x = (x1 + x2) // 2
-
+                center_x = (x1 + x2) / 2
+                car_size = abs(x1 - x2) * abs(y1 - y2)
+                
                 if ((cls_id == self.Class_YOLO.CLASS_CAR_BLACK.value) or (cls_id == self.Class_YOLO.CLASS_CAR_YELLOW.value)):
                     # 노란 차, 검은 차 인식 여부 확인
-                    if ((self._camera_width // 2 - self._ROI_width_YOLO) < center_x < (self._camera_width // 2 + self._ROI_width_YOLO)):
+                    if ((self._camera_width // 2 - self._ROI_width_YOLO) < center_x < (self._camera_width // 2 + self._ROI_width_YOLO) \
+                    and (car_size > self._car_detection_size_threshold)):
                         _flag_car_detected = True
                     
         if (min_ROI < LIDAR_SAFETY_DISTANCE) and (_flag_car_detected):
+            if (not self._car_detection_initialized):
+                self._car_detection_initialized = True
+
             return True
         else:
+            return False
+
+    def __calculate_curv(self):
+        """
+        pos 큐를 기반으로 도로의 곡률을 계산하는 함수
+        Returns:
+            float: 계산된 곡률 값 (0에 가까울수록 직선)
+        """
+        if len(self._pos_history) < 5:
+            return 0.0
+        
+        # 최근 position 값들을 numpy 배열로 변환
+        positions = np.array(list(self._pos_history))
+        
+        # 시간 축 생성 (프레임 단위)
+        time_points = np.arange(len(positions))
+        
+        # 2차 다항식 피팅을 통한 곡률 계산
+        try:
+            # 2차 다항식 계수 구하기: y = ax^2 + bx + c
+            coeffs = np.polyfit(time_points, positions, 2)
+            a = coeffs[0]  # 2차 계수
+            
+            # 곡률은 2차 계수의 절댓값으로 근사
+            curv = abs(a) * 2
+            
+            return curv
+        except:
+            return 0.0
+
+    def __adjust_speed_by_curv(self):
+
+        curv = self.__calculate_curv()
+        
+        if curv < self._curv_threshold_low:
+            # 직선 구간
+            return self._speed_straight
+        elif curv < self._curv_threshold_high:
+            # 일반 커브 구간
+            return self._speed_curve
+        else:
+            # 급커브 구간
+            return self._speed_sharp_curve
+
+    def __lanes_aligned(self):
+        # 차선 직선 판정
+        img = self._bird_eye_view
+
+        _, binary = cv2.threshold(img, 127, 255, cv2.THRESH_BINARY)
+
+        edges = binary.copy()  # Use raw binary as edges if it's clean
+
+        # Run Probabilistic Hough Transform
+        lines = cv2.HoughLinesP(edges, rho=1, theta=np.pi/180, threshold=10,
+                                minLineLength=10, maxLineGap=5)
+
+        img_color = cv2.cvtColor(binary, cv2.COLOR_GRAY2BGR)
+
+        if lines is not None:
+            angles = []
+            for line in lines:
+                x1, y1, x2, y2 = line[0]
+                angle = np.degrees(np.arctan2(y2 - y1, x2 - x1))
+                angles.append(angle)
+                # Visualize lines (optional)
+                cv2.line(img_color, (x1, y1), (x2, y2), (0, 0, 255), 1)
+
+            # Check vertical alignment (e.g., angle near ±90)
+            vertical_lines = [a for a in angles if abs(a) > 80]
+            ratio = len(vertical_lines) / len(angles)
+            if ratio > 0.8:
+                # COMMENTED RECORDING
+                # print("Lanes are mostly vertical — vehicle is likely aligned.")
+
+                # Show the result (if needed)
+                # cv2.imshow("Detected Lines", img_color)
+                return True
+            else:
+                # COMMENTED RECORDING
+                # print("Lanes are not vertical enough — possible misalignment.")
+                return False
+        else:
+            # COMMENTED RECORDING
+            # print("No lines detected — check input or lane visibility.")
             return False
 
     def step(self):
         image = self._image
         self._YOLO_step()
+
         lane_white, lane_yellow = self.__detect_lane(image)
 
         '''
         라이다, YOLO로 차선 변경 분기 마련 후 flag 세우고 검증 필요
         '''
 
-        
         # 나중에 값 바꿔서 감속 넣어도 돼
 
-        if self.car_detected() and not (self._flag_change_lane):
+        if self.car_detected() and self._lane_stabilized and not (self._flag_change_lane):
             self._flag_change_lane = True
+            self._flag_speed_straight = False
 
         if self._flag_change_lane:
         # _flag_change_lane는 라이다로 제일 가까운 값 threshold보다 작을 때 flag 올려버리자 
         # flag 내린 다음에 self.__change_lane_init() 돌려주고
-            angle = self.__change_lane(lane_white, lane_yellow)
-            speed = 10.0 # default
-
+            angle, speed = self.__change_lane(lane_white, lane_yellow)
+           
         else:
             lane_group = lane_white + lane_yellow
             angle = self.__choose_lane(lane_group)
-            speed = 20.0
 
+            if not self._lane_stabilized:
+                speed = self._speed_change
+            else:
+                if self._flag_speed_straight:
+                    speed = self._speed_straight
 
-        '''
-        라이다, YOLO로 차선 변경 분기 마련 후 flag 세우고 검증 필요
-        '''
-    
-        return angle, speed
+                else:
+                    speed = self.__adjust_speed_by_curv()
         
+        # COMMENTED FOR RECORDING
+        # print("FINAL angle: ", angle)
+        # print("FINAL speed: ", speed)
+
+        return angle, speed
