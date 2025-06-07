@@ -20,8 +20,6 @@ import matplotlib.pyplot as plt
 from detector import Detector, MissionType
 from mode_drive import Drive
 from mode_rubbercone import Rubbercone
-
-
 # 커스텀 모듈 import 끝   ======================
 
 class Wait:
@@ -121,14 +119,14 @@ def start():
     # 루프 전 프레임 관련 설정 
     #=========================================
 
+    # 미션 탐지 객체 Detector 클래스로 Instantiation 
     detector = Detector()
-    # 미션 탐지 Detector 클래스 Instantiation 
 
     #=========================================
     # 메인 루프 
     #=========================================
 
-    # Missions
+    # 미션, 클래스 맵핑 (스테이트 머신 구현)
     mission_mapping = {
         MissionType.IDLE: None,
         MissionType.DRIVE: Drive(),
@@ -136,38 +134,34 @@ def start():
         MissionType.RUBBERCONE: Rubbercone(),   
     }
 
-    detected_mission_prev = None
-    # 미션 변경 여부 체크용 
+    # 미션 변경 여부 체크용 버퍼, flag
+    detected_mission_prev = None 
     mission_changed = False
-    # 미션 변경 여부 flag
 
+    # IDLE state를 위한 초기화
     angle = 0
     speed = 0
-    # IDLE state를 위한 초기화
 
+    # < 메인 루프 - 스테이트 머신>
+    # - Detector 클래스의 detector 인스턴스 내 detect_mission 메소드로 미션 탐지
+    # - 이전 미션 스테이트와 탐지된 미션 스테이트를 비교한 뒤 두 스테이트가 
+    # 일치하지 않는 경우에만 주행 클래스를 Instantiate 한다.
     while not rospy.is_shutdown():
 
         detected_mission = detector.detect_mission(image, ranges)
-        # Detector method의 detector instance의 detect_mission 메소드로 미션 탐지
-        
+
         if(detected_mission != detected_mission_prev):
             mode_to_execute = mission_mapping[detected_mission]
             detected_mission_prev = detected_mission
-        # 탐지된 미션이 바뀔 때만 주행 클래스를 Instantiation 하기 위한 조건문
-
+       
         if mode_to_execute:
-        # mode_to_excute가 None이 아닐 시 (=IDLE state가 아닐 시)
             
             mode_to_execute.get_value(image, ranges)
-            # 센서 값 업데이트 
             angle, speed = mode_to_execute.step()
-            # 조향각, 속도 결정
 
         drive(angle, speed)
-        # 조향각, 속도로 실제 주행 수행
 
         time.sleep(0.1)
-        
         cv2.waitKey(1)
 
 #=============================================
