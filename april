@@ -21,15 +21,13 @@ class ToSignal(Node):
         # Detector 객체는 한 번만 생성
         options = apriltag.DetectorOptions(families="tag36h11")
         self.detector = apriltag.Detector(options)
-        self.tag_size = 0.1
         self.camera_params = (371.42821, 372.60371, 310.49805, 235.74201)
-        self.integral = 0
-        self.prev_error = 0
-        self.k=5
-        self.h=20
-        self.thres1=3
-        self.thres2=1.5
-       
+
+        self.tag_size = 0.1
+        self.k=5         # 조향 계수
+        self.h=20        # 조향 각도
+        self.thres1=3    # 조향 시작 거리
+        self.thres2=1.5  # 조향 종료 거리
         
     def get_value(self, image, ranges):
         """
@@ -139,10 +137,6 @@ class ToSignal(Node):
             # yaw 값 출력
             self.get_logger().info(f"Y축(Yaw): {yaw:.2f}°")
 
-            # 실시간 위치와 yaw 업데이트 (시각화용)
-            latest_pose_x = pose_t[0]
-            latest_pose_z = pose_t[2]
-            latest_yaw_deg = yaw
 
 
         # image 출력
