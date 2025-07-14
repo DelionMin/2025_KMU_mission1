@@ -1,0 +1,225 @@
+#!/usr/bin/env python3
+
+import numpy as np
+import cv2
+import apriltag
+from scipy.spatial.transform import Rotation as R
+from rclpy.node import Node
+
+# 프로그램에서 사용할 변수, 저장공간 선언부
+image = np.empty(shape=[0])  # 카메라 이미지를 담을 변수
+
+class ToSignal(Node):
+    def __init__(self):
+        
+        super().__init__('to_signal')
+
+        # 이미지, 라이다 초기화
+        self._image = None
+        self._ranges = None
+        # ✅ Apriltag Detector 초기화
+        # Detector 객체는 한 번만 생성
+        options = apriltag.DetectorOptions(families="tag36h11")
+        self.detector = apriltag.Detector(options)
+        self.tag_size = 0.1
+        self.camera_params = (371.42821, 372.60371, 310.49805, 235.74201)
+        self.integral = 0
+        self.prev_error = 0
+       
+        
+    def get_value(self, image, ranges):
+        """
+        외부(메인 루프)에서 카메라 영상(image)과 라이다 거리배열(ranges) 전달
+        """
+        self._image = image
+        # numpy array로 변환하여 벡터화 연산 활용
+        if not isinstance(ranges, np.ndarray):
+            self._ranges = np.array(ranges)
+        else:
+            self._ranges = ranges
+    
+    
+    
+    def step(self):
+        # 초기화
+        angle = 0
+        speed = 0
+        
+      
+         # distortion coefficients
+        dist_coeffs = np.array([-0.325278, 0.082082, 0.000997, -0.000955, 0.0])
+
+        # camera matrix
+        camera_matrix = np.array([
+        [371.42821, 0.0, 310.49805],
+        [0.0, 372.60371, 235.74201],
+        [0.0, 0.0, 1.0]
+        ])
+
+        # 3x4 Projection Matrix (예시)
+        P = np.array([
+        [262.19424, 0.,       307.58807, 0.],
+        [0.,        311.39255, 234.69525, 0.],
+        [0.,        0.,       1.,        0.]
+        ])
+    
+
+        if self._image is None or self._image.size == 0:
+            return
+
+        # 왜곡 보정 undistorted = cv2.undistort(image, camera_matrix, dist_coeffs)
+        
+        #1. Apriltag 검출
+        # 흑백 변환
+        gray = cv2.cvtColor(self._image, cv2.COLOR_BGR2GRAY)
+
+        # AprilTag 검출
+        detections = self.detector.detect(gray)
+
+
+        # 검출된 태그 시각화
+        # 감지된 태그들을 순회 / 해당 프로그램에서는 태그가 1개이므로 1번만 실행됨
+        for det in detections:                  
+            corners = det.corners.astype(int)   # 태크의 코너 좌표들을 int로 변환
+            for i in range(4):                  # 코너를 잇는 사각형 그리기
+                
+                # image 상에 n번째 점과 n+1번째 점을 잇는 선 그리기 녹색, 두께 2
+                cv2.line(self._image, tuple(corners[i]), tuple(corners[(i + 1) % 4]), (0, 255, 0), 2)
+
+            # 태그의 중심좌표를 반환
+            cx, cy = int(det.center[0]), int(det.center[1])
+            # 태그의 중심 좌표를 image 상에 출력
+            cv2.putText(self._image, f"center:{det.center.astype(int)}", (cx, cy), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+        
+
+            # pose는 거리, 방향에 대한 행렬, e0와 e1은 오차율 관련 정보임
+            pose, e0,e1 = self.detector.detection_pose(det, self.camera_params, self.tag_size)
+
+
+            # pose 행렬 구조  |R t|
+                #                 |0 1|
+                # pose는 4*4 행렬임
+                # R은 3*3의 회전 행렬
+                # t는 3*1 위치벡터
+
+
+            pose_t=pose[0:3,3]    # 회전 행령 데이터 슬라이스
+            pose_r=pose[0:3,0:3]  # 위치 벡터 데이터 슬라이스
+
+
+            # 거리계산 / 위치벡터의 norm을 구한것임
+            # L2 norm은 유클리드 노름으로 해당 벡터의 크기를 계산하는 것과 동치
+            distance = np.linalg.norm(pose_t)
+
+            
+            # 태그의 상대위치 출력 / 원점은 자동차인 것으로 보임
+            self.get_logger().info(f"Position (x, y, z): {pose_t}")
+
+            #x좌표가 커지면 오른쪽으로 이동
+            #y좌표가 커지면 위아래로 이동
+            #z좌표가 커지면 앞으로 이동
+
+            # 계산한 거리 출력
+            self.get_logger().info(f"Distance: {distance:.2f} m")   
+
+
+            # 회전 행렬 객체 생성
+            rot = R.from_matrix(pose_r)
+
+            # 객체에 대해 오일러 각을 z-y-x 순서로 도 단위로 반환
+            euler_angles = rot.as_euler('zyx', degrees=True)
+
+
+            # (yaw, pitch, roll) yaw만 필요하므로 나머지 버림
+            _, yaw, _ = euler_angles
+
+            # yaw 값 출력
+            self.get_logger().info(f"Y축(Yaw): {yaw:.2f}°")
+
+            # 실시간 위치와 yaw 업데이트 (시각화용)
+            latest_pose_x = pose_t[0]
+            latest_pose_z = pose_t[2]
+            latest_yaw_deg = yaw
+
+
+        # image 출력
+        cv2.imshow("Camera View", self._image)
+
+        #2. angle 계산
+        #2.1 변위 계산
+        for det in detections:                  
+            corners = det.corners.astype(int)
+            for i in range(4):
+                cv2.line(self._image, tuple(corners[i]), tuple(corners[(i + 1) % 4]), (0, 255, 0), 2)
+            cx, cy = int(det.center[0]), int(det.center[1])
+            cv2.putText(self._image, f"center:{det.center.astype(int)}", (cx, cy), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+    
+            # 이미지의 크기
+            h, w = self._image.shape[:2]
+            screen_cx = w // 2
+            screen_cy = h // 2
+
+            # 변위 계산
+            dx = cx - screen_cx
+            dy = cy - screen_cy
+
+            # 로그로 출력
+            self.get_logger().info(f"AprilTag 중심과 화면 중앙의 변위: dx={dx}, dy={dy} (픽셀)")
+
+            # 화면에 시각화 (화면 중앙에 십자 표시)
+            cv2.drawMarker(self._image, (screen_cx, screen_cy), (255, 0, 0), markerType=cv2.MARKER_CROSS, markerSize=20, thickness=2)
+            cv2.arrowedLine(self._image, (screen_cx, screen_cy), (cx, cy), (0, 255, 255), 2, tipLength=0.2)
+    
+        #2.2 pid 제어
+        # output=Kp*error+Ki*sum(error)+Kd(error-prev_error)
+        # PID 계수 (실험적으로 조정)
+        
+        # PID 제어 (while True 삭제, 아래처럼 한 번만 계산)
+        distance = np.linalg.norm(pose_t)
+
+        # 거리 기반 PID 계수 동적 계산
+        Kp, Ki, Kd = 0.1, 0.005, 0.04 #주행 해보면서 판단하기
+        
+        target_offset = 20 #실험적인 방법으로 설정(화면 중심으로부터 apriltag 까지 변위 )
+        error = dx - target_offset 
+        #error=>목표 지점 왼편에 위치=>양수=>조향각 음수로 설정
+        #error=>목표 지점 오른편에 위치=>음수=>조향각 양수로 설정
+        
+        # PID 제어
+        self.integral += error
+        derivative = error - self.prev_error
+        #angle 계산
+        steering_angle = -(Kp * error + Ki * self.integral + Kd * derivative)
+        #스케일링
+        steering_angle = np.clip(steering_angle, -1, 1)
+
+        self.prev_error = error
+
+        # 차량 제어 명령 생성 (예시)
+        angle = steering_angle*100
+        speed = 10 # 예: 1.0 등
+        
+        # 차량 제어
+        # drive(angle, speed)
+
+        # Default 제어 명령, 추후에 삭제 예정인데 형식은 그대로 가져다 쓰자
+
+
+        # ==================[ 수정 끝  ]================== 
+        # 0.1초 delay
+        # time.sleep(0.1)
+
+        
+        # 키보드 조작
+        cv2.waitKey(1)
+
+        # image_ar = artag(self._image)
+        # cv2.imshow("ar_tag_applied", image_ar)
+
+    
+
+        return angle, speed 
+    
+
+        
+    
