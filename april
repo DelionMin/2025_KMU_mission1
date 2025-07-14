@@ -25,6 +25,10 @@ class ToSignal(Node):
         self.camera_params = (371.42821, 372.60371, 310.49805, 235.74201)
         self.integral = 0
         self.prev_error = 0
+        self.k=5
+        self.h=20
+        self.thres1=3
+        self.thres2=1.5
        
         
     def get_value(self, image, ranges):
@@ -41,12 +45,11 @@ class ToSignal(Node):
     
     
     def step(self):
-        # 초기화
-        angle = 0
-        speed = 0
-        
+        speed=5
+
+
       
-         # distortion coefficients
+        # distortion coefficients
         dist_coeffs = np.array([-0.325278, 0.082082, 0.000997, -0.000955, 0.0])
 
         # camera matrix
@@ -145,62 +148,27 @@ class ToSignal(Node):
         # image 출력
         cv2.imshow("Camera View", self._image)
 
-        #2. angle 계산
-        #2.1 변위 계산
-        for det in detections:                  
-            corners = det.corners.astype(int)
-            for i in range(4):
-                cv2.line(self._image, tuple(corners[i]), tuple(corners[(i + 1) % 4]), (0, 255, 0), 2)
-            cx, cy = int(det.center[0]), int(det.center[1])
-            cv2.putText(self._image, f"center:{det.center.astype(int)}", (cx, cy), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
-    
-            # 이미지의 크기
-            h, w = self._image.shape[:2]
-            screen_cx = w // 2
-            screen_cy = h // 2
 
-            # 변위 계산
-            dx = cx - screen_cx
-            dy = cy - screen_cy
+        if distance>=self.thres1: # 직선주행
+          angle = 0
+          
+        elif distance<self.thres1 & distance>self.thres2: # 조향
+          if yaw >= self.h: # 편각만큼 조향 완료
+            angle=0
 
-            # 로그로 출력
-            self.get_logger().info(f"AprilTag 중심과 화면 중앙의 변위: dx={dx}, dy={dy} (픽셀)")
+          elif yaw < self.h: # 조향 중
 
-            # 화면에 시각화 (화면 중앙에 십자 표시)
-            cv2.drawMarker(self._image, (screen_cx, screen_cy), (255, 0, 0), markerType=cv2.MARKER_CROSS, markerSize=20, thickness=2)
-            cv2.arrowedLine(self._image, (screen_cx, screen_cy), (cx, cy), (0, 255, 255), 2, tipLength=0.2)
-    
-        #2.2 pid 제어
-        # output=Kp*error+Ki*sum(error)+Kd(error-prev_error)
-        # PID 계수 (실험적으로 조정)
-        
-        # PID 제어 (while True 삭제, 아래처럼 한 번만 계산)
-        distance = np.linalg.norm(pose_t)
+            if yaw - self.h > -20:
+              angle = self.k*(yaw-self.h)
 
-        # 거리 기반 PID 계수 동적 계산
-        Kp, Ki, Kd = 0.1, 0.005, 0.04 #주행 해보면서 판단하기
-        
-        target_offset = 20 #실험적인 방법으로 설정(화면 중심으로부터 apriltag 까지 변위 )
-        error = dx - target_offset 
-        #error=>목표 지점 왼편에 위치=>양수=>조향각 음수로 설정
-        #error=>목표 지점 오른편에 위치=>음수=>조향각 양수로 설정
-        
-        # PID 제어
-        self.integral += error
-        derivative = error - self.prev_error
-        #angle 계산
-        steering_angle = -(Kp * error + Ki * self.integral + Kd * derivative)
-        #스케일링
-        steering_angle = np.clip(steering_angle, -1, 1)
+            elif yaw - self.h <= -20: # 최대조향
+              angle = -100
 
-        self.prev_error = error
 
-        # 차량 제어 명령 생성 (예시)
-        angle = steering_angle*100
-        speed = 10 # 예: 1.0 등
-        
-        # 차량 제어
-        # drive(angle, speed)
+        elif distance < self.thres2: # 라이더 전환
+
+          angle = 0
+
 
         # Default 제어 명령, 추후에 삭제 예정인데 형식은 그대로 가져다 쓰자
 
