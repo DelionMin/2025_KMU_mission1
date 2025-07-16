@@ -178,12 +178,22 @@ class LaneDrive:
     y = (A1 * C2 - A2 * C1) / det
     return int(x), int(y)
 
-  def change_lane(self):
-        
+  def change_lane_1to2(self,image):
+    
 
+    if 차선변경 끝:
+      flag = 0
 
     return
 
+  def change_lane_2to1(self,image):
+  
+
+    if 차선변경 끝:
+      flag = 0
+  
+    return
+  
   def lane_color_detection(image, roi_vertices): # 차선 색깔 판별
     """
     image: BGR 이미지 (OpenCV 읽은 원본)
@@ -255,16 +265,16 @@ class LaneDrive:
 
     self.right_color = self.lane_color_detection(image, roi_right)
 
-    if (self.left_color == 'white') & (self.right_color == 'yellow'): # 1차선
+    if (self.left_color == 'white') and (self.right_color == 'yellow'): # 1차선
       self.lane_constant = 1
     
-    elif (self.left_color == 'yellow') & (self.right_color == 'white'): # 2차선
+    elif (self.left_color == 'yellow') and (self.right_color == 'white'): # 2차선
       self.lane_constant = 2
     
-    elif (self.left_color == 'white') & (self.right_color == 'white'): # error
+    elif (self.left_color == 'white') and (self.right_color == 'white'): # error
       pass
 
-    elif (self.left_color == 'yellow') & (self.right_color == 'yellow'): # error
+    elif (self.left_color == 'yellow') and (self.right_color == 'yellow'): # error
       pass
 
     # === 2. Convert to grayscale and apply Canny ===
@@ -372,91 +382,97 @@ class LaneDrive:
       # 오른쪽 차선과 baseline 교점 좌표 연산
       cursor_right = self.compute_intersection(best_line_right[0], base_line)
 
-
-    # ====================== 커서 초기 조건 안전성 설정 시작 ======================
-
-    # 커서 인식 안되었을 시
-    if cursor_left is None and cursor_right is None:
-      pass
-
-    if cursor_left is None:
-      cursor_right = np.array(cursor_left).copy()
-      cursor_right[0] = cursor_right[0] + self.lane_width
-
-    if cursor_right is None:
-      cursor_right = np.array(cursor_left).copy()
-      cursor_right[0] = cursor_right[0] + self.lane_width
-
-    # ====================== 커서 초기 조건 안전성 설정 끝 ======================
-
-    if cursor_left is not None and cursor_right is not None:
-    # 좌, 우측 커서가 모두 다 유효한 값을 가질 때
-      
-      # 커서 잇는 직선 그리고, 각 커서에 동그라미 마크 표시
-      cv2.line(self.frame, cursor_left, cursor_right, (0, 0, 255), 2)
-      cv2.circle(self.frame, cursor_left, 5, (255, 255, 0), 2)
-      cv2.circle(self.frame, cursor_right, 5, (255, 255, 0), 2)
-
-      # 각 커서 x 좌표 표시
-      text_left = f"{cursor_left[0]}"
-      text_right = f"{cursor_right[0]}"
-      cv2.putText(self.frame, text_left, cursor_left, cv2.FONT_HERSHEY_SIMPLEX,
-        0.5, (0, 255, 255), 2, cv2.LINE_AA)
-      cv2.putText(self.frame, text_right, cursor_right, cv2.FONT_HERSHEY_SIMPLEX,
-        0.5, (0, 255, 255), 2, cv2.LINE_AA)
-
-      # 두 커서 좌표 중점
-      # x값(angle_factor)을 조향에 활용 (실제 활용 시에는 프레임 width / 2 빼서)
-      angle_factor_point = (np.array(cursor_right) + np.array(cursor_left)) // 2
-      angle_factor = angle_factor_point[0]
-
-      # 추후에 PD 제어 후 angle_factor 위치 표시할 변수
-      angle_factor_PD_point = np.array(angle_factor_point).copy()
-
-      # PD 제어 구현
-      if angle_factor_prev:
-        angle_factor_PD = int(self.K_P * angle_factor + self.K_D * (angle_factor - angle_factor_prev))
-
-        # 버퍼 업데이트
-        angle_factor_prev = angle_factor
-
-        # PD 제어 적용 후 Circle 표시할 위치
-        angle_factor_PD_point[0] = angle_factor_PD
-
-        # PD 제어 적용 후 텍스트 표시할 위치
-        angle_factor_PD_point_text = angle_factor_PD_point.copy()
-        angle_factor_PD_point_text[1] = angle_factor_PD_point_text[1] - 30
-        
-        # cv2.imshow에 텍스트 띄우기
-        text_angle_factor_PD = f"angle_factor_PD: {angle_factor_PD}"
-        cv2.putText(self.frame, text_angle_factor_PD, angle_factor_PD_point_text, cv2.FONT_HERSHEY_SIMPLEX,
-          0.5, (0, 255, 255), 2, cv2.LINE_AA)
-        cv2.circle(self.frame, angle_factor_PD_point, 5, (255, 255, 0), 2)
-        
-        # 조향각 연산
-        angle = int((angle_factor_PD - (width // 2)) * self.p_con_p)
-
-        # angle 출력 위치 정의
-        angle_point = angle_factor_PD_point.copy()
-        angle_point[1] = angle_point[1] + 15
-
-        # 조향각 출력
-        text_angle = f"angle: {angle}"
-        cv2.putText(self.frame, text_angle, angle_point, cv2.FONT_HERSHEY_SIMPLEX,
-          0.5, (0, 255, 255), 2, cv2.LINE_AA)
-
-    
-
     subset = self._range[250:256]
 
     # threshold 미만인 값 개수 세기
     count = sum(1 for v in subset if v < self.threshold_distance)
 
-    if count > 4: # 라이다 5개이상 감지시 차선변경 시작
-      self.change_lane()
+    if (count > 4) or (self.flag == 1): # 라이다 5개이상 감지시 차선변경 시작
+      self.flag = 1
+      
+      if self.lane_constant==1: #1차선>2차선
+        self.change_lane_1to2(image)
+      elif self.lane_constant==2: #2차선>1차선
+        self.change_lane_2to1(image)
+
+    # ====================== 커서 초기 조건 안전성 설정 시작 ======================
+    else: # 차선 변경 분기가 아니면
+      # 커서 인식 안되었을 시
+      if cursor_left is None and cursor_right is None:
+        pass
+
+      if cursor_left is None:
+        cursor_right = np.array(cursor_left).copy()
+        cursor_right[0] = cursor_right[0] + self.lane_width
+
+      if cursor_right is None:
+        cursor_right = np.array(cursor_left).copy()
+        cursor_right[0] = cursor_right[0] + self.lane_width
+
+      # ====================== 커서 초기 조건 안전성 설정 끝 ======================
+
+      if cursor_left is not None and cursor_right is not None:
+      # 좌, 우측 커서가 모두 다 유효한 값을 가질 때
         
-        
-    cv2.imshow("Lane Detection", self.frame)
+        # 커서 잇는 직선 그리고, 각 커서에 동그라미 마크 표시
+        cv2.line(self.frame, cursor_left, cursor_right, (0, 0, 255), 2)
+        cv2.circle(self.frame, cursor_left, 5, (255, 255, 0), 2)
+        cv2.circle(self.frame, cursor_right, 5, (255, 255, 0), 2)
+
+        # 각 커서 x 좌표 표시
+        text_left = f"{cursor_left[0]}"
+        text_right = f"{cursor_right[0]}"
+        cv2.putText(self.frame, text_left, cursor_left, cv2.FONT_HERSHEY_SIMPLEX,
+          0.5, (0, 255, 255), 2, cv2.LINE_AA)
+        cv2.putText(self.frame, text_right, cursor_right, cv2.FONT_HERSHEY_SIMPLEX,
+          0.5, (0, 255, 255), 2, cv2.LINE_AA)
+
+        # 두 커서 좌표 중점
+        # x값(angle_factor)을 조향에 활용 (실제 활용 시에는 프레임 width / 2 빼서)
+        angle_factor_point = (np.array(cursor_right) + np.array(cursor_left)) // 2
+        angle_factor = angle_factor_point[0]
+
+        # 추후에 PD 제어 후 angle_factor 위치 표시할 변수
+        angle_factor_PD_point = np.array(angle_factor_point).copy()
+
+        # PD 제어 구현
+        if angle_factor_prev:
+          angle_factor_PD = int(self.K_P * angle_factor + self.K_D * (angle_factor - angle_factor_prev))
+
+          # 버퍼 업데이트
+          angle_factor_prev = angle_factor
+
+          # PD 제어 적용 후 Circle 표시할 위치
+          angle_factor_PD_point[0] = angle_factor_PD
+
+          # PD 제어 적용 후 텍스트 표시할 위치
+          angle_factor_PD_point_text = angle_factor_PD_point.copy()
+          angle_factor_PD_point_text[1] = angle_factor_PD_point_text[1] - 30
+          
+          # cv2.imshow에 텍스트 띄우기
+          text_angle_factor_PD = f"angle_factor_PD: {angle_factor_PD}"
+          cv2.putText(self.frame, text_angle_factor_PD, angle_factor_PD_point_text, cv2.FONT_HERSHEY_SIMPLEX,
+            0.5, (0, 255, 255), 2, cv2.LINE_AA)
+          cv2.circle(self.frame, angle_factor_PD_point, 5, (255, 255, 0), 2)
+          
+          # 조향각 연산
+          angle = int((angle_factor_PD - (width // 2)) * self.p_con_p)
+
+          # angle 출력 위치 정의
+          angle_point = angle_factor_PD_point.copy()
+          angle_point[1] = angle_point[1] + 15
+
+          # 조향각 출력
+          text_angle = f"angle: {angle}"
+          cv2.putText(self.frame, text_angle, angle_point, cv2.FONT_HERSHEY_SIMPLEX,
+            0.5, (0, 255, 255), 2, cv2.LINE_AA)
+
+      
+
+
+          
+          
+      cv2.imshow("Lane Detection", self.frame)
 
     speed = 10
 
