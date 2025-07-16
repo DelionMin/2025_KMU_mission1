@@ -4,7 +4,7 @@ import os
 import signal
 import numpy as np
 import cv2
-from math import inf
+from math import inf,sin,atan
 
 # 이 코드(class)는 step함수에서 다음과 같이 동작한다.
 # 1. 이미지(카메라 데이터)와 class 내의 state를 기반으로 차선의 위치를 알아낸다.
@@ -78,6 +78,8 @@ class LaneDrive:
     self.state=1 # 차선변경 state
 
     self.flag = 0 # 차선변경 on / off
+
+    self.camere_diff = 0.2 # 카메라와 중심 거리
 
   def get_value(self, image, ranges):
     """
@@ -244,7 +246,7 @@ class LaneDrive:
             m = (y2 - y1) / (x2 - x1)
             b = y1 - m * x1
         
-        yello_line_edge = (320-b) / m
+        yello_line_edge = ((320+self.camere_diff*sin(atan(m)))-b) / m
 
 
         if (yello_line_edge<340) or (yello_line_edge>300):
@@ -252,26 +254,80 @@ class LaneDrive:
         angle = 50
 
       case 2: # 초향 복구
-        angle = -50
-        if -왼쪽 선 각도 = 오른쪽 선 각도:
+        # === 2. Convert to grayscale and apply Canny ===
+        # 흑백 이미지 생성
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        
+        # 흑백 이미지에 GaussianBlur(=정규 분포 양상으로 픽셀 값 깎기, 흐릿하게 만들어서 영상처리에 자주 쓴다)
+        # 노이즈 줄이고 선은 더 선명하게 보이도록
+        blur = cv2.GaussianBlur(gray, (5, 5), 0)
+        
+        # blur 이미지에 Canny 변환해서 Edge detection
+        edges = cv2.Canny(blur, 50, 150)
+
+
+
+        # roi_edges에서 직선 인식
+        lines = cv2.HoughLinesP(edges, rho=1, theta=np.pi/180, threshold=80,
+                                minLineLength=50, maxLineGap=10)
+
+        # 왼쪽, 오른쪽 차선 넣어둘 리스트
+        left_lines = []
+        right_lines = []
+
+
+        for line in lines:
+          x1, y1, x2, y2 = line[0]
+
+          # 수직선은 제외
+          if x2 - x1 == 0:
+            continue
+          slope = (y2 - y1) / (x2 - x1)
+
+          # 기울기가 작은 직선들은 제외
+          if abs(slope) < self.THRESHOLD_SLOPE:
+            continue
+          
+          # 기울기 부호로 좌, 우측 판정
+          # ***< 영상처리 시 Y값의 경우 아래로 갈수록 커진다는 점 유의 >***
+          if slope < 0:
+            left_lines.append(line)
+          else:
+            right_lines.append(line)
+
+        best_line_left = self.get_best_line(left_lines)
+        best_line_right = self.get_best_line(right_lines)
+
+        #왼쪽선 기울기
+        x1, y1, x2, y2 = best_line_left 
+
+        # 수직선인 경우 None 반환
+        if x2 - x1 == 0:
+          return None
+
+        m1 = (y2 - y1) / (x2 - x1)
+
+        #오른쪽선 기울기
+        x1, y1, x2, y2 = best_line_right
+
+
+        # 수직선인 경우 None 반환
+        if x2 - x1 == 0:
+          return None
+
+        m2 = (y2 - y1) / (x2 - x1)
+
+        # 기울기가 같으면 차선변경 탈출
+        if -m1 == m2:
           self.flag = 0
           self.state = 1
+        angle = -50
 
     return angle
 
   def change_lane_2to1(self,image):
     
-    match self.state:
-      case 1: #처음 조향
-        angle = -50
-        if (yello_line<340) or (yello_line>300):
-          self.state = 2
-      
-      case 2: # 초향 복구
-        angle = 50
-        if -왼쪽 선 각도 = 오른쪽 선 각도:
-          self.flag = 0
-          self.state = 1
+    angle=0
 
     return angle
   
