@@ -1,0 +1,474 @@
+import time
+import sys
+import os
+import signal
+import numpy as np
+import cv2
+from math import inf
+
+# 이 코드(class)는 step함수에서 다음과 같이 동작한다.
+# 1. 이미지(카메라 데이터)와 class 내의 state를 기반으로 차선의 위치를 알아낸다.
+#   1.1. 이미지를 항공뷰로 변환한다.
+# 2. 차선의 위치를 기반으로 position을 구한다.
+# 3. p제어를 하여 앞바퀴의 각도를 반환한다. 속도는 임의로 설정한다.
+
+class LaneDrive:
+  from enum import Enum
+  
+  # 차선 변경 주행 state
+  class State_change(Enum):
+    INIT = 0
+    DRIVE_STATE_START = 1
+    DRIVE_STATE_END = 2
+
+  def __init__(self) -> None:
+
+    self.height_frame = 640
+
+    # 인식된 차선과의 교점(cursor)을 찾기 위한 프레임 상 가로선(baseline)의 y축 위치
+    # 추후에 baseline_y_rate 로 바꾼 다음에 
+    # int(height * baseline_y_rate) 로 변경해도 되고
+    # TO BE TUNED
+    self.baseline_y_rate = 0.75
+    
+    # 차선 일반적인 폭
+    # TO BE TUNED
+    # 1920 => 640 이니까 일단 실제 대회 차량에서는 80 정도..?
+    self.lane_width = 240
+
+    # 차선 인식 시 사용할 기울기 THRESHOLDS
+    # TO BE TUNED
+    self.THRESHOLD_SLOPE = 0.6
+
+    # 가장 최근에 인식된 best_line (buffer)
+    self.best_line_left_prev = None
+    self.best_line_right_prev = None
+
+    # 차선 색 상수
+    self.COLOR_GREEN = (0, 255, 0)
+    self.COLOR_RED = (0, 0, 255)
+
+
+    # 인식된 차선과의 교점
+    self.cursor_left = None
+    self.cursor_right = None
+
+    # PD 제어 목적 이전 angle_factor 저장용 변수
+    self.angle_factor_prev = None
+    self.angle_factor = None
+    
+    # PD 제어용 각 term에 대한 weight
+    # TO BE TUNED
+    self.K_P = 1
+    self.K_D = 0
+
+    # 픽셀 -> 조향각 scaling factor
+    # TO BE TUNED
+    self.p_con_p = 0.2
+
+    # 차선변경 거리
+    self.threshold_distance = 1
+    
+    # 현재 차선
+    self.lane_constant = 1
+
+    self.left_color = 'white'
+    self.right_color = 'white'
+
+  def get_value(self, image, ranges):
+    """
+    센서 값 받아오기 위한 메소드
+    """
+    self._image = image
+    self._ranges = ranges
+
+  def region_of_interest(self, img, vertices):
+    '''
+    vertices 범위 밖 값들은 다 0으로 만들어 mask를 씌우는 함수
+    '''
+    mask = np.zeros_like(img)
+    if len(img.shape) > 2:
+    # channel이 여러 개인 경우 (e.g. BGR은 channel 3개)
+      channel_count = img.shape[2]
+      ignore_mask_color = (255,) * channel_count
+    else:
+      ignore_mask_color = 255
+
+    # mask에 vertices 모양대로 ignore_mask_color 값 넣음
+    cv2.fillPoly(mask, [vertices], ignore_mask_color)
+
+    # img, mask에 bitwise_and 연산 해서 겹치지 않는 부분은 0으로
+    masked_image = cv2.bitwise_and(img, mask)
+    
+    # 어케 나오는지 궁금하면 이거 기
+    # cv2.imshow("masked_image", masked_image)
+
+    return masked_image
+
+  def get_best_line(self, lines):
+    '''
+    입력된 선들 중에서 대푯값 추출
+    gets: [[x1, y1, x2, y2], [x1, y1, x2, y2], ...]
+    returns: [[x1, y1, x2, y2]]
+
+
+    *** 검증 필요 ***
+    '''
+    best_line = None
+    m_left, b_left = 0.0, 0.0
+    x_sum, y_sum, m_sum = 0.0, 0.0, 0.0
+
+    size = len(lines)
+    if size != 0:
+      for line in lines:
+        x1, y1, x2, y2 = line
+        x_sum += x1 + x2
+        y_sum += y1 + y2
+        if(x2 != x1):
+          m_sum += float(y2-y1)/float(x2-x1)
+        else:
+          m_sum += 0
+      
+      x_avg = x_sum / (size*2)
+      y_avg = y_sum / (size*2)
+      m_left = m_sum / size
+      b_left = y_avg- m_left * x_avg
+    
+    if m_left != 0.0:
+      y1 = 0
+      y2 = self.height_frame    
+      '''
+      y1, y2 실제 주행 환경에서는 값 맞춰서 바꾸기
+      '''
+
+      x1 = int((y1 - b_left) / m_left)
+      x2 = int((y2 - b_left) / m_left)
+
+      best_line = [[x1, y1, x2, y2]]
+
+    return best_line
+    
+  def compute_intersection(self, line1, line2):
+    """
+    두 [[x1, y1, x2, y2]] 자료형으로 나타내어진 직선들의 교점을 선형대수학적 연산을 통해 계산한다.
+    gets: [[x1, y1, x2, y2]] 자료형으로 나타내어진 직선 2개
+    returns: int(x), int(y) (or None => 두 직선이 평행할 때)
+    """
+    x1, y1, x2, y2 = line1[0]
+    x3, y3, x4, y4 = line2[0]
+
+    # Line 1 coefficients
+    A1 = y2 - y1
+    B1 = x1 - x2
+    C1 = A1 * x1 + B1 * y1
+
+    # Line 2 coefficients
+    A2 = y4 - y3
+    B2 = x3 - x4
+    C2 = A2 * x3 + B2 * y3
+
+    # Determinant
+    det = A1 * B2 - A2 * B1
+
+    if det == 0:
+      return None  # Lines are parallel or coincident
+
+    # Cramer's Rule
+    x = (B2 * C1 - B1 * C2) / det
+    y = (A1 * C2 - A2 * C1) / det
+    return int(x), int(y)
+
+  def change_lane(self):
+        
+
+
+    return
+
+  def lane_color_detection(image, roi_vertices): # 차선 색깔 판별
+    """
+    image: BGR 이미지 (OpenCV 읽은 원본)
+    roi_vertices: 차선 후보가 있을 것으로 예상되는 다각형 좌표 (np.array 형태)
+    
+    returns:
+    - mask_white, mask_yellow: 차선 후보 영역 내 흰색, 노란색 마스크
+    - color_detected: 'white', 'yellow', 'unknown' 중 판별 결과
+    """
+
+    # 1. ROI 마스크 생성 (차선 후보 영역)
+    mask = np.zeros_like(image[:,:,0])  # 단일 채널 mask
+    cv2.fillPoly(mask, [roi_vertices], 255)
+    roi_image = cv2.bitwise_and(image, image, mask=mask)
+
+    # 2. BGR → HSV 변환
+    hsv = cv2.cvtColor(roi_image, cv2.COLOR_BGR2HSV)
+
+    # 3. 흰색 범위 (Hue 무관, 낮은 채도, 높은 명도)
+    lower_white = np.array([0, 0, 200])
+    upper_white = np.array([180, 30, 255])
+    mask_white = cv2.inRange(hsv, lower_white, upper_white)
+
+    # 4. 노란색 범위 (Hue 약 20~30, 채도 높음, 명도 중간 이상)
+    lower_yellow = np.array([20, 100, 100])
+    upper_yellow = np.array([30, 255, 255])
+    mask_yellow = cv2.inRange(hsv, lower_yellow, upper_yellow)
+
+    # 5. 흰색과 노란색 픽셀 개수 카운트
+    white_count = cv2.countNonZero(mask_white)
+    yellow_count = cv2.countNonZero(mask_yellow)
+
+    # 6. 색깔 판별
+    if white_count > yellow_count and white_count > 500:  # 임계치 500 픽셀은 상황에 맞게 조정
+      color_detected = 'white'
+    elif yellow_count > white_count and yellow_count > 500:
+      color_detected = 'yellow'
+    else:
+      color_detected = 'unknown'
+
+    return color_detected
+
+  def follow_lane(self):
+    
+    # angle 초기화
+    angle = 0
+
+    image = self._image
+
+    # 흑백 변환 전에 차선 색깔로 찻 추출
+    # 왼쪽
+    
+    roi_left = np.array([[   # 왼쪽 사다리꼴 절반
+        (width * 0.1, height),
+        (width * 0.3, height * 0.6),
+        (width * 0.5, height * 0.6),
+        (width * 0.5, height)
+    ]], dtype=np.int32)
+    
+    self.left_color = self.lane_color_detection(image, roi_left)
+
+    # 오른쪽
+    roi_right = np.array([[   # 오른쪽 사다리꼴 절반
+        (width * 0.5, height),
+        (width * 0.5, height * 0.6),
+        (width * 0.7, height * 0.6),
+        (width * 0.9, height)
+    ]], dtype=np.int32)
+
+    self.right_color = self.lane_color_detection(image, roi_right)
+
+    if (self.left_color == 'white') & (self.right_color == 'yellow'): # 1차선
+      self.lane_constant = 1
+    
+    elif (self.left_color == 'yellow') & (self.right_color == 'white'): # 2차선
+      self.lane_constant = 2
+    
+    elif (self.left_color == 'white') & (self.right_color == 'white'): # error
+      pass
+
+    elif (self.left_color == 'yellow') & (self.right_color == 'yellow'): # error
+      pass
+
+    # === 2. Convert to grayscale and apply Canny ===
+    # 흑백 이미지 생성
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    
+    # 흑백 이미지에 GaussianBlur(=정규 분포 양상으로 픽셀 값 깎기, 흐릿하게 만들어서 영상처리에 자주 쓴다)
+    # 노이즈 줄이고 선은 더 선명하게 보이도록
+    blur = cv2.GaussianBlur(gray, (5, 5), 0)
+    
+    # blur 이미지에 Canny 변환해서 Edge detection
+    edges = cv2.Canny(blur, 50, 150)
+
+    # 프레임 높이, 너비 저장
+    # FYI) frame.shape => [(Height), (Width), (channel -> e.g. BGR)]
+    height, width = image.shape[:2]
+
+    baseline_y_pixel = int(height * self.baseline_y_rate)
+
+    # 화면 상에 가로로 그은 직선 (차선과 교점 찾기 위한 프레임 기준 가로선)
+    base_line = [[0, baseline_y_pixel, width, baseline_y_pixel]]
+
+    # RoI(Region of Interest)의 좌표를 나타내는 np.array
+    roi_vertices = np.array([[
+        (width * 0.1, height),
+        (width * 0.30, height * 0.6),
+        (width * 0.70, height * 0.6),
+        (width * 0.9, height)
+    ]], dtype=np.int32)
+
+    # 사다리꼴을 image에 그리는 함수
+    cv2.polylines(image, roi_vertices, isClosed=True, color=(0, 255, 255), thickness=2)
+
+    # Edge detection을 거친 이미지에 roi 마스킹
+    roi_edges = self.region_of_interest(edges, roi_vertices)
+
+    # roi_edges에서 직선 인식
+    lines = cv2.HoughLinesP(roi_edges, rho=1, theta=np.pi/180, threshold=80,
+                            minLineLength=50, maxLineGap=10)
+
+    # 왼쪽, 오른쪽 차선 넣어둘 리스트
+    left_lines = []
+    right_lines = []
+
+    for line in lines:
+      x1, y1, x2, y2 = line[0]
+
+      # 수직선은 제외
+      if x2 - x1 == 0:
+        continue
+      slope = (y2 - y1) / (x2 - x1)
+
+      # 기울기가 작은 직선들은 제외
+      if abs(slope) < self.THRESHOLD_SLOPE:
+        continue
+      
+      # 기울기 부호로 좌, 우측 판정
+      # ***< 영상처리 시 Y값의 경우 아래로 갈수록 커진다는 점 유의 >***
+      if slope < 0:
+        left_lines.append(line)
+      else:
+        right_lines.append(line)
+
+    best_line_left = self.get_best_line(left_lines)
+    best_line_right = self.get_best_line(right_lines)
+
+    # best_line_left, best_line_right가 인식 X -> None일 때
+    # _prev를 넣어서 intersection 연산
+    # _prev로 line plot 한 경우에는 BGR (0, 0, 255) 빨간 선으로 표시해서 구분
+
+    # 왼쪽 차선 인식 안 된 경우
+    if best_line_left is None:
+      best_line_left = self.best_line_left_prev
+      lane_color_left = self.COLOR_RED
+    # 왼쪽 차선 인식 된 경우
+    else:
+      self.best_line_left_prev = best_line_left
+      lane_color_left = self.COLOR_GREEN
+    
+    # 오른쪽 차선 인식 안 된 경우
+    if best_line_right is None:
+      best_line_right = self.best_line_right_prev
+      lane_color_right = self.COLOR_RED
+    # 오른쪽 차선 인식 된 경우
+    else:
+      self.best_line_right_prev = best_line_right
+      lane_color_right = self.COLOR_GREEN
+
+
+
+    if best_line_left is not None:
+      # 왼쪽 차선 표시
+      x1, y1, x2, y2 = best_line_left[0]
+      cv2.line(self.frame, (x1, y1), (x2, y2), lane_color_left, 2)
+
+      # 왼쪽 차선과 baseline 교점 좌표 연산
+      cursor_left = self.compute_intersection(best_line_left[0], base_line)
+
+
+    if best_line_right is not None:
+      # 오른쪽 차선 표시
+      x1, y1, x2, y2 = best_line_right[0]
+      cv2.line(self.frame, (x1, y1), (x2, y2), lane_color_right, 2)
+
+      # 오른쪽 차선과 baseline 교점 좌표 연산
+      cursor_right = self.compute_intersection(best_line_right[0], base_line)
+
+
+    # ====================== 커서 초기 조건 안전성 설정 시작 ======================
+
+    # 커서 인식 안되었을 시
+    if cursor_left is None and cursor_right is None:
+      pass
+
+    if cursor_left is None:
+      cursor_right = np.array(cursor_left).copy()
+      cursor_right[0] = cursor_right[0] + self.lane_width
+
+    if cursor_right is None:
+      cursor_right = np.array(cursor_left).copy()
+      cursor_right[0] = cursor_right[0] + self.lane_width
+
+    # ====================== 커서 초기 조건 안전성 설정 끝 ======================
+
+    if cursor_left is not None and cursor_right is not None:
+    # 좌, 우측 커서가 모두 다 유효한 값을 가질 때
+      
+      # 커서 잇는 직선 그리고, 각 커서에 동그라미 마크 표시
+      cv2.line(self.frame, cursor_left, cursor_right, (0, 0, 255), 2)
+      cv2.circle(self.frame, cursor_left, 5, (255, 255, 0), 2)
+      cv2.circle(self.frame, cursor_right, 5, (255, 255, 0), 2)
+
+      # 각 커서 x 좌표 표시
+      text_left = f"{cursor_left[0]}"
+      text_right = f"{cursor_right[0]}"
+      cv2.putText(self.frame, text_left, cursor_left, cv2.FONT_HERSHEY_SIMPLEX,
+        0.5, (0, 255, 255), 2, cv2.LINE_AA)
+      cv2.putText(self.frame, text_right, cursor_right, cv2.FONT_HERSHEY_SIMPLEX,
+        0.5, (0, 255, 255), 2, cv2.LINE_AA)
+
+      # 두 커서 좌표 중점
+      # x값(angle_factor)을 조향에 활용 (실제 활용 시에는 프레임 width / 2 빼서)
+      angle_factor_point = (np.array(cursor_right) + np.array(cursor_left)) // 2
+      angle_factor = angle_factor_point[0]
+
+      # 추후에 PD 제어 후 angle_factor 위치 표시할 변수
+      angle_factor_PD_point = np.array(angle_factor_point).copy()
+
+      # PD 제어 구현
+      if angle_factor_prev:
+        angle_factor_PD = int(self.K_P * angle_factor + self.K_D * (angle_factor - angle_factor_prev))
+
+        # 버퍼 업데이트
+        angle_factor_prev = angle_factor
+
+        # PD 제어 적용 후 Circle 표시할 위치
+        angle_factor_PD_point[0] = angle_factor_PD
+
+        # PD 제어 적용 후 텍스트 표시할 위치
+        angle_factor_PD_point_text = angle_factor_PD_point.copy()
+        angle_factor_PD_point_text[1] = angle_factor_PD_point_text[1] - 30
+        
+        # cv2.imshow에 텍스트 띄우기
+        text_angle_factor_PD = f"angle_factor_PD: {angle_factor_PD}"
+        cv2.putText(self.frame, text_angle_factor_PD, angle_factor_PD_point_text, cv2.FONT_HERSHEY_SIMPLEX,
+          0.5, (0, 255, 255), 2, cv2.LINE_AA)
+        cv2.circle(self.frame, angle_factor_PD_point, 5, (255, 255, 0), 2)
+        
+        # 조향각 연산
+        angle = int((angle_factor_PD - (width // 2)) * self.p_con_p)
+
+        # angle 출력 위치 정의
+        angle_point = angle_factor_PD_point.copy()
+        angle_point[1] = angle_point[1] + 15
+
+        # 조향각 출력
+        text_angle = f"angle: {angle}"
+        cv2.putText(self.frame, text_angle, angle_point, cv2.FONT_HERSHEY_SIMPLEX,
+          0.5, (0, 255, 255), 2, cv2.LINE_AA)
+
+    
+
+    subset = self._range[250:256]
+
+    # threshold 미만인 값 개수 세기
+    count = sum(1 for v in subset if v < self.threshold_distance)
+
+    if count > 4: # 라이다 5개이상 감지시 차선변경 시작
+      self.change_lane()
+        
+        
+    cv2.imshow("Lane Detection", self.frame)
+
+    speed = 10
+
+    return angle, speed
+
+
+  def step(self):
+    """
+    메인 루프 내에서 Drive 클래스 인스턴스 활용시 실질적으로 작동시킬 메소드
+    """
+
+    angle, speed = self.follow_lane()
+
+
+    return angle, speed
