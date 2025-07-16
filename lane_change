@@ -75,6 +75,10 @@ class LaneDrive:
     self.left_color = 'white'
     self.right_color = 'white'
 
+    self.state=1 # 차선변경 state
+
+    self.flag = 0 # 차선변경 on / off
+
   def get_value(self, image, ranges):
     """
     센서 값 받아오기 위한 메소드
@@ -121,7 +125,7 @@ class LaneDrive:
     size = len(lines)
     if size != 0:
       for line in lines:
-        x1, y1, x2, y2 = line
+        x1, y1, x2, y2 = line[0]
         x_sum += x1 + x2
         y_sum += y1 + y2
         if(x2 != x1):
@@ -180,19 +184,98 @@ class LaneDrive:
 
   def change_lane_1to2(self,image):
     
+    match self.state:
+      case 1: #처음 조향
 
-    if 차선변경 끝:
-      flag = 0
+        # 노란 이미지 생성
+        hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+        
+        # 노란색 범위 정의 (Hue: 20~30, Saturation: 100~255, Value: 100~255)
+        lower_yellow = np.array([20, 100, 100])
+        upper_yellow = np.array([30, 255, 255])
+        
+        # 노란색 마스크 생성
+        yellow_mask = cv2.inRange(hsv, lower_yellow, upper_yellow)
+        
+        # 원본 이미지에 마스크 적용하여 노란색만 추출
+        yellow_only = cv2.bitwise_and(image, image, mask=yellow_mask)
+        
+        # 노랑 이미지에 GaussianBlur(=정규 분포 양상으로 픽셀 값 깎기, 흐릿하게 만들어서 영상처리에 자주 쓴다)
+        # 노이즈 줄이고 선은 더 선명하게 보이도록
+        yellow_blur = cv2.GaussianBlur((yellow_only), (5, 5), 0)
+        
+        # blur 이미지에 Canny 변환해서 Edge detection
+        yellow_edges = cv2.Canny(yellow_blur, 50, 150)
 
-    return
+        # 프레임 높이, 너비 저장
+        # FYI) frame.shape => [(Height), (Width), (channel -> e.g. BGR)]
+        height, width = image.shape[:2]
+
+        # roi_edges에서 직선 인식
+        yellow_lines = cv2.HoughLinesP(yellow_edges, rho=1, theta=np.pi/180, threshold=80,
+                                minLineLength=50, maxLineGap=10)
+
+        # 왼쪽, 오른쪽 차선 넣어둘 리스트
+        final_yellow_lines = []
+
+        for line in yellow_lines:
+            x1, y1, x2, y2 = line[0]
+
+            # 수직선은 제외
+            if x2 - x1 == 0:
+                continue
+            slope = (y2 - y1) / (x2 - x1)
+
+            # 기울기가 작은 직선들은 제외
+            if abs(slope) < self.THRESHOLD_SLOPE:
+                continue
+            
+            
+            # ***< 영상처리 시 Y값의 경우 아래로 갈수록 커진다는 점 유의 >***
+          
+            final_yellow_lines.append(line)
+
+        best_yellow_line = self.get_best_line(final_yellow_lines)    
+
+        x1, y1, x2, y2 = best_yellow_line[0]
+
+        # 수직선 여부 확인
+        if x2 - x1 != 0:
+            m = (y2 - y1) / (x2 - x1)
+            b = y1 - m * x1
+        
+        yello_line_edge = (320-b) / m
+
+
+        if (yello_line_edge<340) or (yello_line_edge>300):
+          self.state = 2
+        angle = 50
+
+      case 2: # 초향 복구
+        angle = -50
+        if -왼쪽 선 각도 = 오른쪽 선 각도:
+          self.flag = 0
+          self.state = 1
+
+    return angle
 
   def change_lane_2to1(self,image):
+    
+    match self.state:
+      case 1: #처음 조향
+        angle = -50
+        if (yello_line<340) or (yello_line>300):
+          self.state = 2
+      
+      case 2: # 초향 복구
+        angle = 50
+        if -왼쪽 선 각도 = 오른쪽 선 각도:
+          self.flag = 0
+          self.state = 1
+
+    return angle
   
 
-    if 차선변경 끝:
-      flag = 0
-  
-    return
   
   def lane_color_detection(image, roi_vertices): # 차선 색깔 판별
     """
@@ -391,9 +474,9 @@ class LaneDrive:
       self.flag = 1
       
       if self.lane_constant==1: #1차선>2차선
-        self.change_lane_1to2(image)
+        angle = self.change_lane_1to2(image)
       elif self.lane_constant==2: #2차선>1차선
-        self.change_lane_2to1(image)
+        angle = self.change_lane_2to1(image)
 
     # ====================== 커서 초기 조건 안전성 설정 시작 ======================
     else: # 차선 변경 분기가 아니면
