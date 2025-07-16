@@ -66,8 +66,8 @@ class LaneDrive:
     # TO BE TUNED
     self.p_con_p = 0.2
 
-    # 차선변경 거리
-    self.threshold_distance = 1
+    # 차선변경 거리 (1.2m 로 측정됨)
+    self.threshold_distance = 1.2
     
     # 현재 차선
     self.lane_constant = 1
