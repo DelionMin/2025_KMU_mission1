@@ -188,87 +188,108 @@ class ChangeDrive:
 
     return m,b,a
 
+  def find_white(self,image): # 흰색 검출 후 직선의 기울기, 절편 반환
+      # 이미지 생성
+    hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+    
+    # 흰색 범위 정의 (Hue: 20~30, Saturation: 100~255, Value: 100~255)
+    lower_white = np.array([0, 0, 200])
+    upper_white = np.array([180, 30, 255])
+    
+    # 흰색 마스크 생성
+    white_mask = cv2.inRange(hsv, lower_white, upper_white)
+    
+    # 원본 이미지에 마스크 적용하여 흰색만 추출
+    white_only = cv2.bitwise_and(image, image, mask=white_mask)
+    
+    # 흰 이미지에 GaussianBlur(=정규 분포 양상으로 픽셀 값 깎기, 흐릿하게 만들어서 영상처리에 자주 쓴다)
+    # 노이즈 줄이고 선은 더 선명하게 보이도록
+    white_blur = cv2.GaussianBlur((white_only), (5, 5), 0)
+    
+    # blur 이미지에 Canny 변환해서 Edge detection
+    white_edges = cv2.Canny(white_blur, 50, 150)
+
+    # roi_edges에서 직선 인식
+    white_lines = cv2.HoughLinesP(white_edges, rho=1, theta=np.pi/180, threshold=80,
+                            minLineLength=50, maxLineGap=10)
+
+    # 왼쪽, 오른쪽 차선 넣어둘 리스트
+    final_white_lines = []
+
+    for line in white_lines:
+      x1, y1, x2, y2 = line[0]
+
+      # 수직선은 제외
+      if x2 - x1 == 0:
+        continue
+      slope = (y2 - y1) / (x2 - x1)
+
+      # 기울기가 작은 직선들은 제외
+      if abs(slope) < self.THRESHOLD_SLOPE:
+        continue
+      
+      
+      # ***< 영상처리 시 Y값의 경우 아래로 갈수록 커진다는 점 유의 >***
+    
+      final_white_lines.append(line)
+
+    best_yellow_line = self.get_best_line(final_white_lines)    
+
+    x1, y1, x2, y2 = best_yellow_line[0]
+
+    # 수직선 여부 확인
+    if x2 - x1 != 0:
+      m = (y2 - y1) / (x2 - x1)
+      b = y1 - m * x1
+      a = -b/m
+
+    return m,b,a
+
+
   def change_lane_1to2(self,image):
     
     match self.state2:
       case 1: #처음 조향
-        m,b = self.find_yellow(image)
+        m,b,a = self.find_yellow(image)
         
         yello_line_edge = ((480+self.camere_diff*sin(atan(m)))-b) / m
 
 
         if (yello_line_edge<340) or (yello_line_edge>300):
-          self.state = 2
+          self.state2 = 2
         angle = 50
 
-      case 2: # 초향 복구
+      case 2: # 조향 복구
         # === 2. Convert to grayscale and apply Canny ===
-        # 흑백 이미지 생성
-        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+
+
+        roi_left = np.array([[   # 왼쪽 사다리꼴 절반
+        (self.width * 0, self.height),
+        (self.width * 0, self.height * 0),
+        (self.width * 0.5, self.height * 0),
+        (self.width * 0.5, self.height)
+        ]], dtype=np.int32)
+    
+        m1,_,_ = self.find_white(image, roi_left)
+
+    # 오른쪽
+        roi_right = np.array([[   # 오른쪽 사다리꼴 절반
+        (self.width * 0.5, self.height),
+        (self.width * 0.5, self.height * 0),
+        (self.width, self.height * 0),
+        (self.width, self.height)
+        ]], dtype=np.int32)
+    
+        m2,_,_ = self.find_yellow(image, roi_right)
+
+
+
+        # 차선변경 탈출 조건
         
-        # 흑백 이미지에 GaussianBlur(=정규 분포 양상으로 픽셀 값 깎기, 흐릿하게 만들어서 영상처리에 자주 쓴다)
-        # 노이즈 줄이고 선은 더 선명하게 보이도록
-        blur = cv2.GaussianBlur(gray, (5, 5), 0)
+        if abs(m1 + m2) <0.1:
+          pass
         
-        # blur 이미지에 Canny 변환해서 Edge detection
-        edges = cv2.Canny(blur, 50, 150)
 
-
-
-        # roi_edges에서 직선 인식
-        lines = cv2.HoughLinesP(edges, rho=1, theta=np.pi/180, threshold=80,
-                                minLineLength=50, maxLineGap=10)
-
-        # 왼쪽, 오른쪽 차선 넣어둘 리스트
-        left_lines = []
-        right_lines = []
-
-
-        for line in lines:
-          x1, y1, x2, y2 = line[0]
-
-          # 수직선은 제외
-          if x2 - x1 == 0:
-            continue
-          slope = (y2 - y1) / (x2 - x1)
-
-          # 기울기가 작은 직선들은 제외
-          if abs(slope) < self.THRESHOLD_SLOPE:
-            continue
-          
-          # 기울기 부호로 좌, 우측 판정
-          # ***< 영상처리 시 Y값의 경우 아래로 갈수록 커진다는 점 유의 >***
-          if slope < 0:
-            left_lines.append(line)
-          else:
-            right_lines.append(line)
-
-        best_line_left = self.get_best_line(left_lines)
-        best_line_right = self.get_best_line(right_lines)
-
-        #왼쪽선 기울기
-        x1, y1, x2, y2 = best_line_left 
-
-        # 수직선인 경우 None 반환
-        if x2 - x1 == 0:
-          return None
-
-        m1 = (y2 - y1) / (x2 - x1)
-
-        #오른쪽선 기울기
-        x1, y1, x2, y2 = best_line_right
-
-
-        # 수직선인 경우 None 반환
-        if x2 - x1 == 0:
-          return None
-
-        m2 = (y2 - y1) / (x2 - x1)
-
-        # 기울기가 같으면 차선변경 탈출
-        if -m1 == m2:
-          self.flag = 0
-          self.state = 1
         angle = -50
 
     return angle
