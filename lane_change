@@ -322,7 +322,7 @@ class ChangeDrive:
     r = abs(a-320)/cos(theta)
     print("중심 거리 : ",r)
 
-  def chane_lane(self,image):
+  def change_lane(self,image):
     angle = 0
     speed = 10
     
@@ -360,5 +360,5 @@ class ChangeDrive:
     return angle,speed
 
   def step(self):
-    angle, speed = self.follow_lane()
+    angle, speed = self.change_lane()
     return angle, speed
