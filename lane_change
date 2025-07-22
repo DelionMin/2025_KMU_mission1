@@ -262,6 +262,7 @@ class ChangeDrive:
       case 2: # 조향 복구
         # === 2. Convert to grayscale and apply Canny ===
 
+        angle = -50
 
         roi_left = np.array([[   # 왼쪽 사다리꼴 절반
         (self.width * 0, self.height),
@@ -283,14 +284,12 @@ class ChangeDrive:
         m2,_,_ = self.find_yellow(image, roi_right)
 
 
-
+        
         # 차선변경 탈출 조건
         
         if abs(m1 + m2) <0.1:
-          pass
+          angle = 0
         
-
-        angle = -50
 
     return angle
 
