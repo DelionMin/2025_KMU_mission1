@@ -29,8 +29,10 @@ class ChangeDrive:
     # 가장 최근에 인식된 best_line (buffer)
     self.best_line_left_prev = None
     self.best_line_right_prev = None
-    self.state = self.INIT
     
+    self.state = self.INIT
+    self.state2 = 1
+
     # 현재 차선
     self.lane_constant = 0
 
@@ -44,7 +46,7 @@ class ChangeDrive:
     self._image = image
     self._ranges = ranges
 
-  def lane_color_detection(image, roi_vertices): # 차선 색깔 판별
+  def lane_color_detection(image, roi_vertices): # default 상태일 때 앙쪽 차선 색깔 판별
     """
     image: BGR 이미지 (OpenCV 읽은 원본)
     roi_vertices: 차선 후보가 있을 것으로 예상되는 다각형 좌표 (np.array 형태)
@@ -188,7 +190,7 @@ class ChangeDrive:
 
   def change_lane_1to2(self,image):
     
-    match self.state:
+    match self.state2:
       case 1: #처음 조향
         m,b = self.find_yellow(image)
         
@@ -314,7 +316,7 @@ class ChangeDrive:
 
     return lane_constant
 
-  def jjin(self,image):
+  def jjin(self,image): # 상수 찾기용 메소드
 
     m,b,a = self.find_yellow(image)
 
