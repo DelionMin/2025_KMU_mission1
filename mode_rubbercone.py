@@ -1,128 +1,126 @@
 import numpy as np
 
 class Rubbercone:
+    """
+    2-D LiDAR 기반 장애물 회피·속도 계획 클래스.  
+    · step() → (steer_angle[deg], speed[m/s]) 반환
+    """
+
+    # ───────────────────── 초기화 ────────────────────────────────
     def __init__(self):
-        # 거리별 다단계 속도 제어
-        self._DIST_THRESHOLD_FAR = 10.0   # 10m 이상: 최고속도
-        self._DIST_THRESHOLD_MID = 6.0    # 6-10m: 중간속도  
-        self._DIST_THRESHOLD_NEAR = 3.0   # 3-6m: 저속
-        
-        # 속도 설정 
-        self._SPEED_MAX = 20        # 최고속도 (장애물 멀 때)
-        self._SPEED_HIGH = 15       # 고속 (중간거리)
-        self._SPEED_MID = 10        # 중속 (가까운 거리)
-        self._SPEED_SLOW = 7.0        # 저속 (매우 가까울 때)
-        
-        # Gap 탐색 파라미터 
-        self._GAP_THRESH = 2.4      # gap 판단 기준
-        self._STEER_SCALE = 4.0     # 기본 조향 강도
-        self._STEER_SCALE_HIGH = 2.5    # 고속일 때 조향 
-        self._STEER_SCALE_MID = 4.0     # 중속일 때 조향
-        self._STEER_SCALE_SLOW = 5.0    # 저속일 때 조향 
-        
-        # 이미지, 라이다 저장
-        self._image = None
+        # 거리 임계값 [m]
+        self._DIST_THRESHOLD_FAR  = 1.0   # >1.0m → 최고속
+        self._DIST_THRESHOLD_MID  = 0.6   # >0.6m → 고속
+        self._DIST_THRESHOLD_NEAR = 0.4   # >0.4m → 중속
+
+        # 속도 [m/s]
+        self._SPEED_MAX  = 10
+        self._SPEED_HIGH = 10
+        self._SPEED_MID  = 11
+        self._SPEED_SLOW = 11             # 현재 적용되고 있는 파라미터
+
+        # Gap 파라미터
+        self._GAP_THRESH_LOW   = 0.01
+        self._GAP_THRESH       = 0.7
+        self._MIN_GAP_PTS      = 10       # LiDAR 포인트 ~개 이하는 ‘좁은 틈’으로 간주
+
+        self._STEER_SCALE_HIGH = 1.0
+        self._STEER_SCALE_MID  = 1.3
+        self._STEER_SCALE_SLOW = 1.5      # 현재 적용되고 있는 파라미터
+
+        # 전방 인덱스(약 200도)
+        self._left_indices  = np.arange(391, 252, -1)   # 391‥253 (139)
+        self._right_indices = np.arange(252, 113, -1)   # 252‥114 (139)
+
+        self._centre_front =  (len(self._left_indices) + len(self._right_indices)) // 2
+
+        # 버퍼
+        self._image  = None
         self._ranges = None
-        
-        # 성능 최적화를 위한 미리 계산된 인덱스
-        self._left_indices = np.arange(89, -1, -1)   # [89, 88, ..., 1, 0]
-        self._right_indices = np.arange(359, 269, -1)  # [359, 358, ..., 271, 270]
-        
+
+    # ───────────────────── 입력 수신 ─────────────────────────────
     def get_value(self, image, ranges):
-        """
-        외부(메인 루프)에서 카메라 영상(image)과 라이다 거리배열(ranges) 전달
-        """
-        self._image = image
-        # numpy array로 변환하여 벡터화 연산 활용
-        if not isinstance(ranges, np.ndarray):
-            self._ranges = np.array(ranges)
-        else:
-            self._ranges = ranges
-    
+        self._image  = image
+        self._ranges = np.asarray(ranges)
+
+    # ───────────────────── 주행 결정 ────────────────────────────
     def step(self):
-        """
-        거리별 다단계 속도 제어로 안전하면서도 빠른 주행
-        1) 전방 180도 구하기 (0~89, 270~359)
-        2) 거리에 따른 속도 및 조향 결정:
-           - 10m 이상: 최고속도로 직진
-           - 6-10m: 고속으로 직진  
-           - 3-6m: 중속으로 gap 탐색
-           - 3m 미만: 저속으로 신중한 gap 탐색
-        """
         if self._ranges is None:
-            return 0, self._SPEED_MAX
-        
-        front_ranges = self._get_front_ranges()
-        dist_min = np.min(front_ranges)
-        
-        # 거리별 다단계 제어
+            return 0.0, self._SPEED_MAX
+
+        front = self._get_front_ranges()
+               
+        # ─── dist_min 계산: 오류 값(<= 1 cm) 무시 ───
+        valid_front = front[front > self._GAP_THRESH_LOW]   # 0.01 m 이하는 제외
+        if valid_front.size == 0:                           # 전부 오류면 failsafe
+            dist_min = np.inf
+        else:
+            dist_min = valid_front.min()
+
+        c = self._centre_front
+
+        # print(f"{dist_min}")       # 디버깅용
+
         if dist_min > self._DIST_THRESHOLD_FAR:
-            # 10m 이상: 최고속도 직진
-            return 0, self._SPEED_MAX
-        elif dist_min > self._DIST_THRESHOLD_MID:
-            # 6-10m: 고속 직진 
-            gap_idx = self._find_largest_gap(front_ranges)
-            angle = (gap_idx - 89) * self._STEER_SCALE_HIGH  # 고속용 조향각도
+            return 0.0, self._SPEED_MAX
+
+        gap_idx = self._find_largest_gap(front)
+        offset  = gap_idx - c
+
+        if dist_min > self._DIST_THRESHOLD_MID:
+            angle = offset * self._STEER_SCALE_HIGH
             return angle, self._SPEED_HIGH
         elif dist_min > self._DIST_THRESHOLD_NEAR:
-            # 3-6m: 중속으로 공격적 gap 탐색
-            gap_idx = self._find_largest_gap(front_ranges)
-            angle = (gap_idx - 89) * self._STEER_SCALE_MID   # 중속용 조향각도
+            angle = offset * self._STEER_SCALE_MID
             return angle, self._SPEED_MID
         else:
-            # 3m 미만: 저속으로 매우 공격적인 gap 탐색
-            gap_idx = self._find_largest_gap(front_ranges)
-            angle = (gap_idx - 89) * self._STEER_SCALE_SLOW  # 저속용 최대 조향각도
-            print(f"Aggressive turn! dist={dist_min:.2f}, angle={angle:.2f}")
+            angle = offset * self._STEER_SCALE_SLOW
             return angle, self._SPEED_SLOW
-    
+
+    # ───────────────────── 헬퍼 ────────────────────────────────
     def _get_front_ranges(self):
         """
-        numpy 벡터화 연산을 사용하여 전방 180도 배열 생성
-        왼쪽(0~89) + 오른쪽(270~359) 를
-        '왼쪽끝 -> 중앙 -> 오른쪽끝' 순서로 합쳐 전방 180도 배열 생성
+        정면 약 200도를 반환한다
         """
-        # 벡터화 연산으로 한번에 추출 및 뒤집기
-        left_segment = self._ranges[self._left_indices]   # [89->0] 순서
-        right_segment = self._ranges[self._right_indices] # [359->270] 순서
-        
-        # concatenate로 합치기 
-        front_ranges = np.concatenate([left_segment, right_segment])
-        return front_ranges
-    
+
+        left  = self._ranges[self._left_indices]
+        right = self._ranges[self._right_indices]
+        return np.concatenate([left, right])
+
     def _find_largest_gap(self, front_ranges):
         """
-        numpy 벡터화 연산을 사용하여 가장 큰 gap 찾기
-        front_ranges(길이=180) 내에서
-        distance >= self._GAP_THRESH 인 연속 구간 중 가장 긴 곳을 찾고, 중앙 인덱스 반환
+        distance ≥ _GAP_THRESH(m) 인 연속 구간 중
+        가장 긴 구간의 중앙 인덱스를 반환.
         """
-        threshold = self._GAP_THRESH
-        
-        # 벡터화 연산으로 threshold 이상인 위치 찾기
-        valid_mask = front_ranges >= threshold
-        
-        if not np.any(valid_mask):
-            # gap이 없으면 중앙 반환
-            return 89
-        
-        # 연속된 구간 찾기 (diff를 이용한 효율적인 방법)
-        # valid_mask의 변화점 찾기
+
+        valid_mask = (front_ranges >= self._GAP_THRESH) | (front_ranges <= self._GAP_THRESH_LOW)   
+
+        if not valid_mask.any():
+            return len(front_ranges) // 2         
+
         padded = np.concatenate([[False], valid_mask, [False]])
-        diff = np.diff(padded.astype(int))
+        diff   = np.diff(padded.astype(int))
+        starts = np.where(diff == 1)[0]
+        ends   = np.where(diff == -1)[0] - 1
+        sizes  = ends - starts + 1
+
+        mask   = sizes >= self._MIN_GAP_PTS          # 갭 최소치 추가
+        starts, ends, sizes = starts[mask], ends[mask], sizes[mask]
         
-        starts = np.where(diff == 1)[0]   # gap 시작점들
-        ends = np.where(diff == -1)[0] - 1  # gap 끝점들
+        if sizes.size == 0:                          # 후보가 사라지면
+            return len(front_ranges)//2              # 그냥 중앙 유지
+
+        k = np.argmax(sizes)
+        start_idx, end_idx = starts[k], ends[k]
+
+        # 최대 갭 출력
+
+        # print(f"[GAP] start={start_idx:3d}, end={end_idx:3d}")       
+
+        # ───────────────────────────────────────────────────────────────────────────────────
+
+        # 갭 전부 한번에 출력
         
-        if len(starts) == 0:
-            return 89
+        # print(list(zip(starts, ends, sizes)))   
         
-        # 각 gap의 크기 계산
-        gap_sizes = ends - starts + 1
-        
-        # 가장 큰 gap 찾기
-        max_gap_idx = np.argmax(gap_sizes)
-        best_start = starts[max_gap_idx]
-        best_end = ends[max_gap_idx]
-        best_center = (best_start + best_end) // 2
-        
-        return best_center
+        return (start_idx + end_idx) // 2
