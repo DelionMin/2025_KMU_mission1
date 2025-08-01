@@ -1,0 +1,390 @@
+import time
+import sys
+import os
+import signal
+import numpy as np
+import cv2
+from math import inf,sin,atan,cos
+
+# 이 코드(class)는 step함수에서 다음과 같이 동작한다.
+# 1. 이미지(카메라 데이터)와 class 내의 state를 기반으로 차선의 위치를 알아낸다.
+#   1.1. 이미지를 항공뷰로 변환한다.
+# 2. 차선의 위치를 기반으로 position을 구한다.
+# 3. p제어를 하여 앞바퀴의 각도를 반환한다. 속도는 임의로 설정한다.
+
+
+
+class ChangeDrive:
+  INIT = 0
+  CHANGE_STATE_1to2 = 1
+  CHANGE_STATE_2to1 = 2
+
+  def __init__(self) -> None:
+    # 차선 인식 시 사용할 기울기 THRESHOLDS
+    # TO BE TUNED
+    self.THRESHOLD_SLOPE = 0.6
+    self.height = 0
+    self.width = 0
+
+    # 가장 최근에 인식된 best_line (buffer)
+    self.best_line_left_prev = None
+    self.best_line_right_prev = None
+    
+    self.state = self.INIT
+    self.state2 = 1
+
+    # 현재 차선
+    self.lane_constant = 0
+
+
+    self.camere_diff = 0.2 # 카메라와 중심 거리
+
+  def get_value(self, image, ranges):
+    """
+    센서 값 받아오기 위한 메소드
+    """
+    self._image = image
+    self._ranges = ranges
+
+  def lane_color_detection(image, roi_vertices): # default 상태일 때 앙쪽 차선 색깔 판별
+    """
+    image: BGR 이미지 (OpenCV 읽은 원본)
+    roi_vertices: 차선 후보가 있을 것으로 예상되는 다각형 좌표 (np.array 형태)
+    
+    returns:
+    - mask_white, mask_yellow: 차선 후보 영역 내 흰색, 노란색 마스크
+    - color_detected: 'white', 'yellow', 'unknown' 중 판별 결과
+    """
+
+    # 1. ROI 마스크 생성 (차선 후보 영역)
+    mask = np.zeros_like(image[:,:,0])  # 단일 채널 mask
+    cv2.fillPoly(mask, [roi_vertices], 255)
+    roi_image = cv2.bitwise_and(image, image, mask=mask)
+
+    # 2. BGR → HSV 변환
+    hsv = cv2.cvtColor(roi_image, cv2.COLOR_BGR2HSV)
+
+    # 3. 흰색 범위 (Hue 무관, 낮은 채도, 높은 명도)
+    lower_white = np.array([0, 0, 200])
+    upper_white = np.array([180, 30, 255])
+    mask_white = cv2.inRange(hsv, lower_white, upper_white)
+
+    # 4. 노란색 범위 (Hue 약 20~30, 채도 높음, 명도 중간 이상)
+    lower_yellow = np.array([20, 100, 100])
+    upper_yellow = np.array([30, 255, 255])
+    mask_yellow = cv2.inRange(hsv, lower_yellow, upper_yellow)
+
+    # 5. 흰색과 노란색 픽셀 개수 카운트
+    white_count = cv2.countNonZero(mask_white)
+    yellow_count = cv2.countNonZero(mask_yellow)
+
+    # 6. 색깔 판별
+    if white_count > yellow_count and white_count > 500:  # 임계치 500 픽셀은 상황에 맞게 조정
+      color_detected = 'white'
+    elif yellow_count > white_count and yellow_count > 500:
+      color_detected = 'yellow'
+    else:
+      color_detected = 'unknown'
+
+    return color_detected
+  
+  def get_best_line(self, lines):
+    '''
+    입력된 선들 중에서 대푯값 추출
+    gets: [[x1, y1, x2, y2], [x1, y1, x2, y2], ...]
+    returns: [[x1, y1, x2, y2]]
+
+
+    *** 검증 필요 ***
+    '''
+    best_line = None
+    m_left, b_left = 0.0, 0.0
+    x_sum, y_sum, m_sum = 0.0, 0.0, 0.0
+
+    size = len(lines)
+    if size != 0:
+      for line in lines:
+        x1, y1, x2, y2 = line[0]
+        x_sum += x1 + x2
+        y_sum += y1 + y2
+        if(x2 != x1):
+          m_sum += float(y2-y1)/float(x2-x1)
+        else:
+          m_sum += 0
+      
+      x_avg = x_sum / (size*2)
+      y_avg = y_sum / (size*2)
+      m_left = m_sum / size
+      b_left = y_avg- m_left * x_avg
+    
+    if m_left != 0.0:
+      y1 = 0
+      y2 = self.height_frame    
+      '''
+      y1, y2 실제 주행 환경에서는 값 맞춰서 바꾸기
+      '''
+
+      x1 = int((y1 - b_left) / m_left)
+      x2 = int((y2 - b_left) / m_left)
+
+      best_line = [[x1, y1, x2, y2]]
+
+    return best_line
+  
+  def find_yellow(self,image): # 노란색 검출 후 직선의 기울기, 절편 반환
+      # 노란 이미지 생성
+    hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+    
+    # 노란색 범위 정의 (Hue: 20~30, Saturation: 100~255, Value: 100~255)
+    lower_yellow = np.array([20, 100, 100])
+    upper_yellow = np.array([30, 255, 255])
+    
+    # 노란색 마스크 생성
+    yellow_mask = cv2.inRange(hsv, lower_yellow, upper_yellow)
+    
+    # 원본 이미지에 마스크 적용하여 노란색만 추출
+    yellow_only = cv2.bitwise_and(image, image, mask=yellow_mask)
+    
+    # 노랑 이미지에 GaussianBlur(=정규 분포 양상으로 픽셀 값 깎기, 흐릿하게 만들어서 영상처리에 자주 쓴다)
+    # 노이즈 줄이고 선은 더 선명하게 보이도록
+    yellow_blur = cv2.GaussianBlur((yellow_only), (5, 5), 0)
+    
+    # blur 이미지에 Canny 변환해서 Edge detection
+    yellow_edges = cv2.Canny(yellow_blur, 50, 150)
+
+    # roi_edges에서 직선 인식
+    yellow_lines = cv2.HoughLinesP(yellow_edges, rho=1, theta=np.pi/180, threshold=80,
+                            minLineLength=50, maxLineGap=10)
+
+    # 왼쪽, 오른쪽 차선 넣어둘 리스트
+    final_yellow_lines = []
+
+    for line in yellow_lines:
+      x1, y1, x2, y2 = line[0]
+
+      # 수직선은 제외
+      if x2 - x1 == 0:
+        continue
+      slope = (y2 - y1) / (x2 - x1)
+
+      # 기울기가 작은 직선들은 제외
+      if abs(slope) < self.THRESHOLD_SLOPE:
+        continue
+      
+      
+      # ***< 영상처리 시 Y값의 경우 아래로 갈수록 커진다는 점 유의 >***
+    
+      final_yellow_lines.append(line)
+
+    best_yellow_line = self.get_best_line(final_yellow_lines)    
+
+    x1, y1, x2, y2 = best_yellow_line[0]
+
+    # 수직선 여부 확인
+    if x2 - x1 != 0:
+      m = (y2 - y1) / (x2 - x1)
+      b = y1 - m * x1
+      a = -b/m
+
+    return m,b,a
+
+  def find_white(self,image): # 흰색 검출 후 직선의 기울기, 절편 반환
+      # 이미지 생성
+    hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+    
+    # 흰색 범위 정의 (Hue: 20~30, Saturation: 100~255, Value: 100~255)
+    lower_white = np.array([0, 0, 200])
+    upper_white = np.array([180, 30, 255])
+    
+    # 흰색 마스크 생성
+    white_mask = cv2.inRange(hsv, lower_white, upper_white)
+    
+    # 원본 이미지에 마스크 적용하여 흰색만 추출
+    white_only = cv2.bitwise_and(image, image, mask=white_mask)
+    
+    # 흰 이미지에 GaussianBlur(=정규 분포 양상으로 픽셀 값 깎기, 흐릿하게 만들어서 영상처리에 자주 쓴다)
+    # 노이즈 줄이고 선은 더 선명하게 보이도록
+    white_blur = cv2.GaussianBlur((white_only), (5, 5), 0)
+    
+    # blur 이미지에 Canny 변환해서 Edge detection
+    white_edges = cv2.Canny(white_blur, 50, 150)
+
+    # roi_edges에서 직선 인식
+    white_lines = cv2.HoughLinesP(white_edges, rho=1, theta=np.pi/180, threshold=80,
+                            minLineLength=50, maxLineGap=10)
+
+    # 왼쪽, 오른쪽 차선 넣어둘 리스트
+    final_white_lines = []
+
+    for line in white_lines:
+      x1, y1, x2, y2 = line[0]
+
+      # 수직선은 제외
+      if x2 - x1 == 0:
+        continue
+      slope = (y2 - y1) / (x2 - x1)
+
+      # 기울기가 작은 직선들은 제외
+      if abs(slope) < self.THRESHOLD_SLOPE:
+        continue
+      
+      
+      # ***< 영상처리 시 Y값의 경우 아래로 갈수록 커진다는 점 유의 >***
+    
+      final_white_lines.append(line)
+
+    best_yellow_line = self.get_best_line(final_white_lines)    
+
+    x1, y1, x2, y2 = best_yellow_line[0]
+
+    # 수직선 여부 확인
+    if x2 - x1 != 0:
+      m = (y2 - y1) / (x2 - x1)
+      b = y1 - m * x1
+      a = -b/m
+
+    return m,b,a
+
+
+  def change_lane_1to2(self,image):
+    match self.state2:
+      case 1: #처음 조향
+        
+        m,b,a = self.find_yellow(image)
+
+        yello_line_edge = ((480+self.camere_diff*sin(atan(m)))-b) / m
+
+        if (yello_line_edge<340) or (yello_line_edge>300):
+          self.state2 = 2
+        angle = 50
+
+      case 2: # 조향 복구
+
+        # === 2. Convert to grayscale and apply Canny ===
+
+        angle = -50
+
+        roi_left = np.array([[   # 왼쪽 사다리꼴 절반
+        (self.width * 0, self.height),
+        (self.width * 0, self.height * 0),
+        (self.width * 0.5, self.height * 0),
+        (self.width * 0.5, self.height)
+        ]], dtype=np.int32)
+
+        m1,_,_ = self.find_white(image, roi_left)
+
+        # 오른쪽
+        roi_right = np.array([[   # 오른쪽 사다리꼴 절반
+        (self.width * 0.5, self.height),
+        (self.width * 0.5, self.height * 0),
+        (self.width, self.height * 0),
+        (self.width, self.height)
+        ]], dtype=np.int32)
+    
+        m2,_,_ = self.find_yellow(image, roi_right)
+
+
+        
+        # 차선변경 탈출 조건
+        
+        if abs(m1 + m2) < 0.1:
+          angle = 0
+        
+
+    return angle
+
+  def change_lane_2to1(self,image):
+    
+    angle=0
+
+    return angle
+
+  def count_lanes(self, image, height, width):  # 현재 차선 판별
+    lane_constant=0
+    roi_left = np.array([[   # 왼쪽 사다리꼴 절반
+        (width * 0.1, height),
+        (width * 0.3, height * 0.6),
+        (width * 0.5, height * 0.6),
+        (width * 0.5, height)
+    ]], dtype=np.int32)
+    
+    left_color = self.lane_color_detection(image, roi_left)
+
+    # 오른쪽
+    roi_right = np.array([[   # 오른쪽 사다리꼴 절반
+        (width * 0.5, height),
+        (width * 0.5, height * 0.6),
+        (width * 0.7, height * 0.6),
+        (width * 0.9, height)
+    ]], dtype=np.int32)
+    
+    right_color = self.lane_color_detection(image, roi_right)
+
+    
+
+    if (left_color == 'white') and (right_color == 'yellow'): # 1차선
+      lane_constant = 1
+    
+    elif (left_color == 'yellow') and (right_color == 'white'): # 2차선
+      lane_constant = 2
+    
+    elif (left_color == 'white') and (right_color == 'white'): # error
+      lane_constant = 0
+
+    elif (left_color == 'yellow') and (right_color == 'yellow'): # error
+      lane_constant = 0
+
+    return lane_constant
+
+  def jjin(self,image): # 상수 찾기용 메소드
+
+    m,b,a = self.find_yellow(image)
+
+    theta = atan(abs(m))
+    r = abs(a-320)/cos(theta)
+    print("중심 거리 : ",r)
+
+  def change_lane(self,image):
+    angle = 0
+    speed = 10
+    
+    self.jjin(image)
+
+
+    if self.state == self.INIT:
+
+      self.height, self.width = image.shape[:2]
+      
+      self.lane_constant = self.count_lanes(image,self.height, self.width)
+      if self.lane_constant==0:
+        pass  
+
+      elif self.lane_constant in (1, 2):
+        if self.lane_constant == self.count_lanes(image,self.height, self.width): #한번더 확인 정확도 높으면 지우기
+
+          if self.lane_constant == 1: # 1차선이면 LtR
+            self.state = self.CHANGE_STATE_1to2
+          elif self.lane_constant == 2: # 2차선이면 RtL
+            self.state = self.CHANGE_STATE_2to1
+        else:
+          self.lane_constant = 0
+
+
+    elif self.state == self.CHANGE_STATE_1to2:
+    
+      image = self._image    
+      angle = self.change_lane_1to2(image)
+      
+
+
+    elif self.state == self.CHANGE_STATE_2to1:
+      image = self._image    
+      angle = self.change_lane_2to1(image)  
+    
+    
+    return angle,speed
+
+  def step(self):
+    
+    angle, speed = self.change_lane()
+    return angle, speed
