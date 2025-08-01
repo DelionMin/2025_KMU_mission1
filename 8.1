@@ -185,13 +185,27 @@ class ChangeDrive:
     c = x1 * y2 - x2 * y1
     return a, b, c
     
-  
+
   def change_lane(self,image):
 
     속도 = 가까운 차 추종
 
 
     if self.state == self.INIT:
+      Kp1 =1 # 비례
+      Ki1 =2 # 적분
+      Kd1 =3 # 미분
+
+      dt = 0.1
+      prev_error1 = 0
+      integral1 = 0
+
+      Kp2 = 1 # 비례
+      Ki2 = 2 # 적분
+      Kd2 = 3 # 미분
+      
+      prev_error2 = 0
+      integral2 = 0
 
       self.height, self.width = image.shape[:2]
       angle = 0
@@ -204,41 +218,37 @@ class ChangeDrive:
   
 
 
-        # PD 제어 구현 -> 선 각도 , 선 위치 맞추기, 라이다나 초음파로 옆차선 차량 유무 확인
+        # PD 제어 구현 ->  선 위치 맞추기, 선 각도 , 라이다나 초음파로 옆차선 차량 유무 확인
       
-      if self.angle_factor_prev is not None:
-        # DEBUGGING
-        print("PD WORKING")
-        # DEBUGGING
-        angle_factor_PD = int(self.K_P * angle_factor + self.K_D * (angle_factor - self.angle_factor_prev))
-
-        # 버퍼 업데이트
-        self.angle_factor_prev = angle_factor_PD
-
-        # PD 제어 적용 후 Circle 표시할 위치
-        angle_factor_PD_point[0] = angle_factor_PD
-
-        # PD 제어 적용 후 텍스트 표시할 위치
-        angle_factor_PD_point_text = angle_factor_PD_point.copy()
-        angle_factor_PD_point_text[1] = angle_factor_PD_point_text[1] - 30
+      if 옆차선 차 없음:
         
-        # cv2.imshow에 텍스트 띄우기
-        text_angle_factor_PD = f"angle_factor_PD: {angle_factor_PD}"
-        cv2.putText(frame, text_angle_factor_PD, angle_factor_PD_point_text, cv2.FONT_HERSHEY_SIMPLEX,
-          0.5, (0, 255, 255), 2, cv2.LINE_AA)
-        cv2.circle(frame, angle_factor_PD_point, 5, (255, 255, 0), 2)
-        
-        # 조향각 연산
-        angle = int((angle_factor_PD - (width // 2)) * self.p_con_p)
+        # 위치 맞추기 pid
+        if not ((self.width/2-10)<(-(c+b*self.height)/a)<(self.width/2+10)):
+          target1 = 320
+          current1 = (-(c+b*self.height)/a)
 
-        # angle 출력 위치 정의
-        angle_point = angle_factor_PD_point.copy()
-        angle_point[1] = angle_point[1] + 15
+          error1 = target1 - current1
+          integral1 += error1 * dt
+          derivative1 = (error1 - prev_error1) / dt if dt > 0 else 0
 
-        # 조향각 출력
-        text_angle = f"angle: {angle}"
-        cv2.putText(frame, text_angle, angle_point, cv2.FONT_HERSHEY_SIMPLEX,
-          0.5, (0, 255, 255), 2, cv2.LINE_AA)
+          angle = Kp1 * error1 + Ki1 * integral1 + Kd1 * derivative1
+          prev_error1 = error1
+
+
+        # 기울기 맞추기 pid
+        # b->0
+        if ((self.width/2-10)<(-(c+b*self.height)/a)<(self.width/2+10)):
+          target2 = 0
+          current2 = b
+
+          error2 = target2 - current2
+          integral2 += error2 * dt
+          derivative2 = (error2 - prev_error2) / dt if dt > 0 else 0
+
+          angle = Kp2 * error2 + Ki2 * integral2 + Kd2 * derivative2
+          prev_error2 = error2
+
+
 
       a,b,c = self.find_yellow(image)
 
@@ -260,15 +270,15 @@ class ChangeDrive:
         angle = 0
 
         if yolo로 차량 2개 인식 시
-          느린쪽 차량이 충분히 가까워 졌을 때 빠른 쪽으로 이동
           
-          if 멀면
-            self.state = self.line_change
-          if 충분히 가까우면
-            if 앞차가 2차선
+          if 가까운 차량이 느린 차량이라고 판별될 때
+            if 가까운 차가 2차선
               self.state = self.return_1
-            elif 앞차가 1차선
+            elif 가까운 차가 1차선
               self.state = self.return_2
+            
+          else:
+            self.state = self.line_change
             
       
         elif yolo로 차량 1개 인식 시
