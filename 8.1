@@ -16,9 +16,12 @@ from math import inf,sin,atan,cos
 
 class ChangeDrive:
   INIT = 0
-  CHANGE_STATE_1to2 = 1
-  CHANGE_STATE_2to1 = 2
+  line_change = 1
+  detect = 2
+  return_1 = 3
+  return_2 = 4
 
+  
   def __init__(self) -> None:
     # 차선 인식 시 사용할 기울기 THRESHOLDS
     # TO BE TUNED
@@ -162,15 +165,10 @@ class ChangeDrive:
     for line in yellow_lines:
       x1, y1, x2, y2 = line[0]
 
-      # 수직선은 제외
-      if x2 - x1 == 0:
-        continue
-      slope = (y2 - y1) / (x2 - x1)
 
-      # 기울기가 작은 직선들은 제외
-      if abs(slope) < self.THRESHOLD_SLOPE:
-        continue
-      
+      if x1 == x2 and y1 == y2:
+        pass
+
       
       # ***< 영상처리 시 Y값의 경우 아래로 갈수록 커진다는 점 유의 >***
     
@@ -180,206 +178,112 @@ class ChangeDrive:
 
     x1, y1, x2, y2 = best_yellow_line[0]
 
-    # 수직선 여부 확인
-    if x2 - x1 != 0:
-      m = (y2 - y1) / (x2 - x1)
-      b = y1 - m * x1
-      a = -b/m
 
-    return m,b,a
-
-  def find_white(self,image): # 흰색 검출 후 직선의 기울기, 절편 반환
-      # 이미지 생성
-    hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+    # ax + by + c = 0
+    a = y1 - y2
+    b = x2 - x1
+    c = x1 * y2 - x2 * y1
+    return a, b, c
     
-    # 흰색 범위 정의 (Hue: 20~30, Saturation: 100~255, Value: 100~255)
-    lower_white = np.array([0, 0, 200])
-    upper_white = np.array([180, 30, 255])
-    
-    # 흰색 마스크 생성
-    white_mask = cv2.inRange(hsv, lower_white, upper_white)
-    
-    # 원본 이미지에 마스크 적용하여 흰색만 추출
-    white_only = cv2.bitwise_and(image, image, mask=white_mask)
-    
-    # 흰 이미지에 GaussianBlur(=정규 분포 양상으로 픽셀 값 깎기, 흐릿하게 만들어서 영상처리에 자주 쓴다)
-    # 노이즈 줄이고 선은 더 선명하게 보이도록
-    white_blur = cv2.GaussianBlur((white_only), (5, 5), 0)
-    
-    # blur 이미지에 Canny 변환해서 Edge detection
-    white_edges = cv2.Canny(white_blur, 50, 150)
-
-    # roi_edges에서 직선 인식
-    white_lines = cv2.HoughLinesP(white_edges, rho=1, theta=np.pi/180, threshold=80,
-                            minLineLength=50, maxLineGap=10)
-
-    # 왼쪽, 오른쪽 차선 넣어둘 리스트
-    final_white_lines = []
-
-    for line in white_lines:
-      x1, y1, x2, y2 = line[0]
-
-      # 수직선은 제외
-      if x2 - x1 == 0:
-        continue
-      slope = (y2 - y1) / (x2 - x1)
-
-      # 기울기가 작은 직선들은 제외
-      if abs(slope) < self.THRESHOLD_SLOPE:
-        continue
-      
-      
-      # ***< 영상처리 시 Y값의 경우 아래로 갈수록 커진다는 점 유의 >***
-    
-      final_white_lines.append(line)
-
-    best_yellow_line = self.get_best_line(final_white_lines)    
-
-    x1, y1, x2, y2 = best_yellow_line[0]
-
-    # 수직선 여부 확인
-    if x2 - x1 != 0:
-      m = (y2 - y1) / (x2 - x1)
-      b = y1 - m * x1
-      a = -b/m
-
-    return m,b,a
-
-
-  def change_lane_1to2(self,image):
-    match self.state2:
-      case 1: #처음 조향
-        
-        m,b,a = self.find_yellow(image)
-
-        yello_line_edge = ((480+self.camere_diff*sin(atan(m)))-b) / m
-
-        if (yello_line_edge<340) or (yello_line_edge>300):
-          self.state2 = 2
-        angle = 50
-
-      case 2: # 조향 복구
-
-        # === 2. Convert to grayscale and apply Canny ===
-
-        angle = -50
-
-        roi_left = np.array([[   # 왼쪽 사다리꼴 절반
-        (self.width * 0, self.height),
-        (self.width * 0, self.height * 0),
-        (self.width * 0.5, self.height * 0),
-        (self.width * 0.5, self.height)
-        ]], dtype=np.int32)
-
-        m1,_,_ = self.find_white(image, roi_left)
-
-        # 오른쪽
-        roi_right = np.array([[   # 오른쪽 사다리꼴 절반
-        (self.width * 0.5, self.height),
-        (self.width * 0.5, self.height * 0),
-        (self.width, self.height * 0),
-        (self.width, self.height)
-        ]], dtype=np.int32)
-    
-        m2,_,_ = self.find_yellow(image, roi_right)
-
-
-        
-        # 차선변경 탈출 조건
-        
-        if abs(m1 + m2) < 0.1:
-          angle = 0
-        
-
-    return angle
-
-  def change_lane_2to1(self,image):
-    
-    angle=0
-
-    return angle
-
-  def count_lanes(self, image, height, width):  # 현재 차선 판별
-    lane_constant=0
-    roi_left = np.array([[   # 왼쪽 사다리꼴 절반
-        (width * 0.1, height),
-        (width * 0.3, height * 0.6),
-        (width * 0.5, height * 0.6),
-        (width * 0.5, height)
-    ]], dtype=np.int32)
-    
-    left_color = self.lane_color_detection(image, roi_left)
-
-    # 오른쪽
-    roi_right = np.array([[   # 오른쪽 사다리꼴 절반
-        (width * 0.5, height),
-        (width * 0.5, height * 0.6),
-        (width * 0.7, height * 0.6),
-        (width * 0.9, height)
-    ]], dtype=np.int32)
-    
-    right_color = self.lane_color_detection(image, roi_right)
-
-    
-
-    if (left_color == 'white') and (right_color == 'yellow'): # 1차선
-      lane_constant = 1
-    
-    elif (left_color == 'yellow') and (right_color == 'white'): # 2차선
-      lane_constant = 2
-    
-    elif (left_color == 'white') and (right_color == 'white'): # error
-      lane_constant = 0
-
-    elif (left_color == 'yellow') and (right_color == 'yellow'): # error
-      lane_constant = 0
-
-    return lane_constant
-
-  def jjin(self,image): # 상수 찾기용 메소드
-
-    m,b,a = self.find_yellow(image)
-
-    theta = atan(abs(m))
-    r = abs(a-320)/cos(theta)
-    print("중심 거리 : ",r)
-
+  
   def change_lane(self,image):
-    angle = 0
-    speed = 10
-    
-    self.jjin(image)
+
+    속도 = 가까운 차 추종
 
 
     if self.state == self.INIT:
 
       self.height, self.width = image.shape[:2]
+      angle = 0
+      if (self.height>0) and (self.width>0):
+        self.state = self.line_change
+
+
+    elif self.state == self.line_change:
+      a,b,c = self.find_yellow(image)
+  
+
+
+        # PD 제어 구현 -> 선 각도 , 선 위치 맞추기, 라이다나 초음파로 옆차선 차량 유무 확인
       
-      self.lane_constant = self.count_lanes(image,self.height, self.width)
-      if self.lane_constant==0:
-        pass  
+      if self.angle_factor_prev is not None:
+        # DEBUGGING
+        print("PD WORKING")
+        # DEBUGGING
+        angle_factor_PD = int(self.K_P * angle_factor + self.K_D * (angle_factor - self.angle_factor_prev))
 
-      elif self.lane_constant in (1, 2):
-        if self.lane_constant == self.count_lanes(image,self.height, self.width): #한번더 확인 정확도 높으면 지우기
+        # 버퍼 업데이트
+        self.angle_factor_prev = angle_factor_PD
 
-          if self.lane_constant == 1: # 1차선이면 LtR
-            self.state = self.CHANGE_STATE_1to2
-          elif self.lane_constant == 2: # 2차선이면 RtL
-            self.state = self.CHANGE_STATE_2to1
-        else:
-          self.lane_constant = 0
+        # PD 제어 적용 후 Circle 표시할 위치
+        angle_factor_PD_point[0] = angle_factor_PD
+
+        # PD 제어 적용 후 텍스트 표시할 위치
+        angle_factor_PD_point_text = angle_factor_PD_point.copy()
+        angle_factor_PD_point_text[1] = angle_factor_PD_point_text[1] - 30
+        
+        # cv2.imshow에 텍스트 띄우기
+        text_angle_factor_PD = f"angle_factor_PD: {angle_factor_PD}"
+        cv2.putText(frame, text_angle_factor_PD, angle_factor_PD_point_text, cv2.FONT_HERSHEY_SIMPLEX,
+          0.5, (0, 255, 255), 2, cv2.LINE_AA)
+        cv2.circle(frame, angle_factor_PD_point, 5, (255, 255, 0), 2)
+        
+        # 조향각 연산
+        angle = int((angle_factor_PD - (width // 2)) * self.p_con_p)
+
+        # angle 출력 위치 정의
+        angle_point = angle_factor_PD_point.copy()
+        angle_point[1] = angle_point[1] + 15
+
+        # 조향각 출력
+        text_angle = f"angle: {angle}"
+        cv2.putText(frame, text_angle, angle_point, cv2.FONT_HERSHEY_SIMPLEX,
+          0.5, (0, 255, 255), 2, cv2.LINE_AA)
+
+      a,b,c = self.find_yellow(image)
+
+      if a == 0:
+        pass
+
+      elif (b == 0) and ((self.width/2-10)<(-c/a)<(self.width/2+10)):
+        self.state = self.detect
+      
+      elif (b == 0):
+        pass
+      
+      elif ((self.width/2-10)<(-(c+b*self.height)/a)<(self.width/2+10)) and ((self.width/2-10)<(-c/a)<(self.width/2+10)):
+        self.state = self.detect
 
 
-    elif self.state == self.CHANGE_STATE_1to2:
-    
-      image = self._image    
-      angle = self.change_lane_1to2(image)
+
+    elif self.state == self.detect:
+        angle = 0
+
+        if yolo로 차량 2개 인식 시
+          느린쪽 차량이 충분히 가까워 졌을 때 빠른 쪽으로 이동
+          
+          if 멀면
+            self.state = self.line_change
+          if 충분히 가까우면
+            if 앞차가 2차선
+              self.state = self.return_1
+            elif 앞차가 1차선
+              self.state = self.return_2
+            
+      
+        elif yolo로 차량 1개 인식 시
+
+          if 앞차가 2차선
+            self.state = self.return_1
+          elif 앞차가 1차선
+            self.state = self.return_2
       
 
+    elif self.state == self.return_1:
 
-    elif self.state == self.CHANGE_STATE_2to1:
-      image = self._image    
-      angle = self.change_lane_2to1(image)  
+
+    elif self.state == self.return_2:
+
     
     
     return angle,speed
