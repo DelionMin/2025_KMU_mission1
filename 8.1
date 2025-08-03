@@ -21,6 +21,12 @@ class ChangeDrive:
   return_1 = 3
   return_2 = 4
 
+  yolo = [100, 100, 100, 100] #알아서 yolo로 받아오기
+  yolo_y = yolo[1]     
+  yolo_x = yolo[0]
+  yolo_weight = yolo[2]
+  yolo_height = yolo[3]
+
   
   def __init__(self) -> None:
     # 차선 인식 시 사용할 기울기 THRESHOLDS
@@ -159,6 +165,9 @@ class ChangeDrive:
     yellow_lines = cv2.HoughLinesP(yellow_edges, rho=1, theta=np.pi/180, threshold=80,
                             minLineLength=50, maxLineGap=10)
 
+    if not final_yellow_lines:
+      return 0,0,0
+
     # 왼쪽, 오른쪽 차선 넣어둘 리스트
     final_yellow_lines = []
 
@@ -186,26 +195,41 @@ class ChangeDrive:
     return a, b, c
     
 
+  def find_closeObstacle_lane(self, image):
+    a,b,c = self.find_yellow(image)
+  
+    if b == 0:
+      yellow_x = -(c/a)
+
+    elif a == 0:
+      return 0
+
+    elif (a/b) != 0:
+      k = self.yolo_y + self.yolo_height//2
+      yellow_x = (-c-b*k)/a
+
+
+      if (yellow_x > self.yolo_x): # 1차선
+        return 1
+      
+      elif(yellow_x < self.yolo_x): #2차선
+        return 2
+      
+      elif(yellow_x == self.yolo_x):
+        return 0
+
   def change_lane(self,image):
 
     속도 = 가까운 차 추종
 
 
     if self.state == self.INIT:
-      Kp1 =1 # 비례
-      Ki1 =2 # 적분
-      Kd1 =3 # 미분
-
+      Kp1 = 1
+      Kd1 = 3 # 미분
+      Ka1 = 3 # 각도비례
       dt = 0.1
       prev_error1 = 0
-      integral1 = 0
-
-      Kp2 = 1 # 비례
-      Ki2 = 2 # 적분
-      Kd2 = 3 # 미분
-      
-      prev_error2 = 0
-      integral2 = 0
+      derivative1 = 0
 
       self.height, self.width = image.shape[:2]
       angle = 0
@@ -222,31 +246,29 @@ class ChangeDrive:
       
       if 옆차선 차 없음:
         
+
         # 위치 맞추기 pid
+
+          
+        
         if not ((self.width/2-10)<(-(c+b*self.height)/a)<(self.width/2+10)):
           target1 = 320
           current1 = (-(c+b*self.height)/a)
+          target2 = 0
+
+          if b==0:
+            current2=0
+          else:
+            current2 = -(a/b)
 
           error1 = target1 - current1
-          integral1 += error1 * dt
+          error2 = target2 - current2
           derivative1 = (error1 - prev_error1) / dt if dt > 0 else 0
 
-          angle = Kp1 * error1 + Ki1 * integral1 + Kd1 * derivative1
+          angle = Kp1 * error1 + Kd1 * derivative1 - Ka1 * error2
           prev_error1 = error1
 
 
-        # 기울기 맞추기 pid
-        # b->0
-        if ((self.width/2-10)<(-(c+b*self.height)/a)<(self.width/2+10)):
-          target2 = 0
-          current2 = b
-
-          error2 = target2 - current2
-          integral2 += error2 * dt
-          derivative2 = (error2 - prev_error2) / dt if dt > 0 else 0
-
-          angle = Kp2 * error2 + Ki2 * integral2 + Kd2 * derivative2
-          prev_error2 = error2
 
 
 
@@ -282,11 +304,13 @@ class ChangeDrive:
             
       
         elif yolo로 차량 1개 인식 시
-
-          if 앞차가 2차선
+          g = self.find_closeObstacle_lane(image)
+          if g==2:
             self.state = self.return_1
-          elif 앞차가 1차선
+          elif g==1:
             self.state = self.return_2
+          else:
+            pass
       
 
     elif self.state == self.return_1:
