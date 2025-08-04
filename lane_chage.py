@@ -5,6 +5,7 @@ import signal
 import numpy as np
 import cv2
 from math import inf,sin,atan,cos
+from ultralytics import YOLO
 
 # 이 코드(class)는 step함수에서 다음과 같이 동작한다.
 # 1. 이미지(카메라 데이터)와 class 내의 state를 기반으로 차선의 위치를 알아낸다.
@@ -12,6 +13,9 @@ from math import inf,sin,atan,cos
 # 2. 차선의 위치를 기반으로 position을 구한다.
 # 3. p제어를 하여 앞바퀴의 각도를 반환한다. 속도는 임의로 설정한다.
 
+
+#<YOLO 모델 학습 후 추가>
+model = YOLO(os.path.join(os.path.dirname(__file__), "detector.pt"))
 
 
 class ChangeDrive:
@@ -41,6 +45,15 @@ class ChangeDrive:
 
 
     self.camere_diff = 0.2 # 카메라와 중심 거리
+    
+     # 클래스 ID 매핑 (detector.pt 모델에 따라 조정 필요)
+    self.class_names = {
+      'signal_red': 0,
+      'signal_yellow': 1,
+      'signal_green': 2,
+      'rubbercone': 3,
+      'car' : 4
+    }
 
   def get_value(self, image, ranges):
     """
@@ -185,6 +198,57 @@ class ChangeDrive:
     c = x1 * y2 - x2 * y1
     return a, b, c
     
+  def _detect_car(self):
+    """
+    YOLO 모델로 상대차량 감지,
+    바운딩 박스 중심점, 넓이, 높이 리스트만 반환
+    """
+    if self._image is None:
+        return []
+
+    detected_boxes = []
+
+    try:
+        results = model(self._image, verbose=False)
+        for result in results:
+            boxes = result.boxes
+            if boxes is not None:
+                for box in boxes:
+                    confidence = float(box.conf[0])
+                    class_id = int(box.cls[0])
+                    if (confidence > self.confidence_threshold and 
+                        class_id == self.class_names['car']):
+                        xyxy = box.xyxy[0].cpu().numpy()
+                        x1, y1, x2, y2 = xyxy
+                        center = [(x1 + x2) / 2, (y1 + y2) / 2]
+                        width = x2 - x1
+                        height = y2 - y1
+                        detected_boxes.append({
+                            'center': center,
+                            'width': width,
+                            'height': height
+                        })
+        return detected_boxes
+
+    except Exception as e:
+        print(f"Error in _detect_car: {e}")
+        return []
+      
+    '''
+    반환 예시
+    [
+    {
+        'center': [190.65, 270.45],
+        'width': 140.5,
+        'height': 139.5
+    },
+    {
+        'center': [460.0, 225.0],
+        'width': 120.0,
+        'height': 150.0
+    }
+  ]
+    '''
   
   def change_lane(self,image):
     
@@ -280,10 +344,9 @@ class ChangeDrive:
         angle = 0
 
         if yolo로 차량 2개 인식 시
-          느린쪽 차량이 충분히 가까워 졌을 때 빠른 쪽으로 이동
+          yolo 차량 1개 인식할때까지 상대 차량 따라 주행
           
           if 멀면
-
             self.state = self.line_change
           if 충분히 가까우면
             if 앞차가 2차선
@@ -301,6 +364,7 @@ class ChangeDrive:
       
 
     elif self.state == self.return_1:
+      angle = 
 
 
     elif self.state == self.return_2:
