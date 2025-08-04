@@ -13,7 +13,6 @@ from ultralytics import YOLO
 # 2. 차선의 위치를 기반으로 position을 구한다.
 # 3. p제어를 하여 앞바퀴의 각도를 반환한다. 속도는 임의로 설정한다.
 
-
 #<YOLO 모델 학습 후 추가>
 model = YOLO(os.path.join(os.path.dirname(__file__), "detector.pt"))
 
@@ -45,8 +44,8 @@ class ChangeDrive:
 
 
     self.camere_diff = 0.2 # 카메라와 중심 거리
-    
-     # 클래스 ID 매핑 (detector.pt 모델에 따라 조정 필요)
+
+    # 클래스 ID 매핑 (detector.pt 모델에 따라 조정 필요)
     self.class_names = {
       'signal_red': 0,
       'signal_yellow': 1,
@@ -54,6 +53,8 @@ class ChangeDrive:
       'rubbercone': 3,
       'car' : 4
     }
+
+    self.confidence_threshold = 6
 
   def get_value(self, image, ranges):
     """
@@ -172,6 +173,9 @@ class ChangeDrive:
     yellow_lines = cv2.HoughLinesP(yellow_edges, rho=1, theta=np.pi/180, threshold=80,
                             minLineLength=50, maxLineGap=10)
 
+    if not final_yellow_lines:
+      return 0,0,0
+
     # 왼쪽, 오른쪽 차선 넣어둘 리스트
     final_yellow_lines = []
 
@@ -198,6 +202,60 @@ class ChangeDrive:
     c = x1 * y2 - x2 * y1
     return a, b, c
     
+  def find_white(self,image): # 하얀색 검출 후 직선의 기울기, 절편 반환
+      # 하얀 이미지 생성
+    hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+    
+
+    lower_white = np.array([0, 0, 200])
+    upper_white = np.array([180, 30, 255])
+    
+    # 하얀색 마스크 생성
+    white_mask = cv2.inRange(hsv, lower_white, upper_white)
+    
+    # 원본 이미지에 마스크 적용하여 하얀색만 추출
+    white_only = cv2.bitwise_and(image, image, mask=white_mask)
+    
+    # 하얀 이미지에 GaussianBlur(=정규 분포 양상으로 픽셀 값 깎기, 흐릿하게 만들어서 영상처리에 자주 쓴다)
+    # 노이즈 줄이고 선은 더 선명하게 보이도록
+    white_blur = cv2.GaussianBlur((white_only), (5, 5), 0)
+    
+    # blur 이미지에 Canny 변환해서 Edge detection
+    white_edges = cv2.Canny(white_blur, 50, 150)
+
+    # roi_edges에서 직선 인식
+    white_lines = cv2.HoughLinesP(white_edges, rho=1, theta=np.pi/180, threshold=80,
+                            minLineLength=50, maxLineGap=10)
+
+    if not final_white_lines:
+      return 0,0,0
+
+    # 왼쪽, 오른쪽 차선 넣어둘 리스트
+    final_white_lines = []
+
+    for line in white_lines:
+      x1, y1, x2, y2 = line[0]
+
+
+      if x1 == x2 and y1 == y2:
+        pass
+
+      
+      # ***< 영상처리 시 Y값의 경우 아래로 갈수록 커진다는 점 유의 >***
+    
+      final_white_lines.append(line)
+
+    best_white_line = self.get_best_line(final_white_lines)    
+
+    x1, y1, x2, y2 = best_white_line[0]
+
+
+    # ax + by + c = 0
+    a = y1 - y2
+    b = x2 - x1
+    c = x1 * y2 - x2 * y1
+    return a, b, c
+
   def _detect_car(self):
     """
     YOLO 모델로 상대차량 감지,
@@ -209,30 +267,30 @@ class ChangeDrive:
     detected_boxes = []
 
     try:
-        results = model(self._image, verbose=False)
-        for result in results:
-            boxes = result.boxes
-            if boxes is not None:
-                for box in boxes:
-                    confidence = float(box.conf[0])
-                    class_id = int(box.cls[0])
-                    if (confidence > self.confidence_threshold and 
-                        class_id == self.class_names['car']):
-                        xyxy = box.xyxy[0].cpu().numpy()
-                        x1, y1, x2, y2 = xyxy
-                        center = [(x1 + x2) / 2, (y1 + y2) / 2]
-                        width = x2 - x1
-                        height = y2 - y1
-                        detected_boxes.append({
-                            'center': center,
-                            'width': width,
-                            'height': height
-                        })
-        return detected_boxes
+      results = model(self._image, verbose=False)
+      for result in results:
+        boxes = result.boxes
+        if boxes is not None:
+          for box in boxes:
+            confidence = float(box.conf[0])
+            class_id = int(box.cls[0])
+            if (confidence > self.confidence_threshold and 
+              class_id == self.class_names['car']):
+              xyxy = box.xyxy[0].cpu().numpy()
+              x1, y1, x2, y2 = xyxy
+              center = [(x1 + x2) / 2, (y1 + y2) / 2]
+              width = x2 - x1
+              height = y2 - y1
+              detected_boxes.append({
+                'center': center,
+                'width': width,
+                'height': height
+              })
+      return detected_boxes
 
     except Exception as e:
-        print(f"Error in _detect_car: {e}")
-        return []
+      print(f"Error in _detect_car: {e}")
+      return []
       
     '''
     반환 예시
@@ -249,33 +307,57 @@ class ChangeDrive:
     }
   ]
     '''
+
+  def find_closeObstacle_lane(self, image):
+    '''    {
+        'center': [190.65, 270.45],
+        'width': 140.5,
+        'height': 139.5
+    }
+
+  yolo = [100, 100, 100, 100] #알아서 yolo로 받아오기
+
+    '''
+    yolo = self._detect_car()
+    yolo_y = yolo['center'][1]     
+    yolo_x = yolo['center'][0]
+    yolo_width = yolo['width']
+    yolo_height = yolo['height']
+
+    a,b,c = self.find_yellow(image)
   
+    if b == 0:
+      yellow_x = -(c/a)
+
+    elif a == 0:
+      return 0
+
+    elif (a/b) != 0:
+      k = yolo_y + yolo_height//2
+      yellow_x = (-c-b*k)/a
+
+
+      if (yellow_x > yolo_x): # 1차선
+        return 1
+      
+      elif(yellow_x < yolo_x): #2차선
+        return 2
+      
+      elif(yellow_x == yolo_x):
+        return 0
+
   def change_lane(self,image):
-    
-    #속도 = 가까운 차 추종
-    if 가까운 차 감지:
 
-      target_distance=10 #목표 추종 거리 설정
-      distance=self.ragnes[] #몇번인지는 나중에
-      # 거리 기반 PID 계수 동적 계산
-      Kp, Ki, Kd = 1.5, 0.005, 0.04 #주행 해보면서 판단하기
-      
-      error = distance-target_distance #distance : 주행 차량과 가까운 차량의 거리. 라이다로 계산
-      
-      # PID 제어
-      self.integral += error
-      derivative = error - self.prev_error
-      #speed 계산
-      steering_speed = -(Kp * error + Ki * self.integral + Kd * derivative)
-      #스케일링 필요
-    
-      self.prev_error = error
-
-      # 차량 제어 명령 생성 (예시)
-      speed = steering_speed
+    속도 = 가까운 차 추종
 
 
     if self.state == self.INIT:
+      Kp1 = 1
+      Kd1 = 3 # 미분
+      Ka1 = 3 # 각도비례
+      dt = 0.1
+      prev_error1 = 0
+      derivative1 = 0
 
       self.height, self.width = image.shape[:2]
       angle = 0
@@ -288,41 +370,35 @@ class ChangeDrive:
   
 
 
-        # PD 제어 구현 -> 선 각도 , 선 위치 맞추기, 라이다나 초음파로 옆차선 차량 유무 확인
+        # PD 제어 구현 ->  선 위치 맞추기, 선 각도 , 라이다나 옆차선 차량 유무 확인
       
-      if self.angle_factor_prev is not None:
-        # DEBUGGING
-        print("PD WORKING")
-        # DEBUGGING
-        angle_factor_PD = int(self.K_P * angle_factor + self.K_D * (angle_factor - self.angle_factor_prev))
 
-        # 버퍼 업데이트
-        self.angle_factor_prev = angle_factor_PD
+      
 
-        # PD 제어 적용 후 Circle 표시할 위치
-        angle_factor_PD_point[0] = angle_factor_PD
+      # 위치 맞추기 pid
 
-        # PD 제어 적용 후 텍스트 표시할 위치
-        angle_factor_PD_point_text = angle_factor_PD_point.copy()
-        angle_factor_PD_point_text[1] = angle_factor_PD_point_text[1] - 30
         
-        # cv2.imshow에 텍스트 띄우기
-        text_angle_factor_PD = f"angle_factor_PD: {angle_factor_PD}"
-        cv2.putText(frame, text_angle_factor_PD, angle_factor_PD_point_text, cv2.FONT_HERSHEY_SIMPLEX,
-          0.5, (0, 255, 255), 2, cv2.LINE_AA)
-        cv2.circle(frame, angle_factor_PD_point, 5, (255, 255, 0), 2)
-        
-        # 조향각 연산
-        angle = int((angle_factor_PD - (width // 2)) * self.p_con_p)
+      
+      if not ((self.width/2-10)<(-(c+b*self.height)/a)<(self.width/2+10)):
+        target1 = 320
+        current1 = (-(c+b*self.height)/a)
+        target2 = 0
 
-        # angle 출력 위치 정의
-        angle_point = angle_factor_PD_point.copy()
-        angle_point[1] = angle_point[1] + 15
+        if b==0:
+          current2=0
+        else:
+          current2 = -(a/b)
 
-        # 조향각 출력
-        text_angle = f"angle: {angle}"
-        cv2.putText(frame, text_angle, angle_point, cv2.FONT_HERSHEY_SIMPLEX,
-          0.5, (0, 255, 255), 2, cv2.LINE_AA)
+        error1 = target1 - current1
+        error2 = target2 - current2
+        derivative1 = (error1 - prev_error1) / dt if dt > 0 else 0
+
+        angle = Kp1 * error1 + Kd1 * derivative1 - Ka1 * error2
+        prev_error1 = error1
+
+
+
+
 
       a,b,c = self.find_yellow(image)
 
@@ -341,34 +417,121 @@ class ChangeDrive:
 
 
     elif self.state == self.detect:
-        angle = 0
+      angle = 0
+      yolo_list = []
+      yolo_list = self._detect_car()
 
-        if yolo로 차량 2개 인식 시
-          yolo 차량 1개 인식할때까지 상대 차량 따라 주행
-          
-          if 멀면
-            self.state = self.line_change
-          if 충분히 가까우면
-            if 앞차가 2차선
-              self.state = self.return_1
-            elif 앞차가 1차선
-              self.state = self.return_2
-            
-      
-        elif yolo로 차량 1개 인식 시
-
-          if 앞차가 2차선
+      if len(yolo_list) == 2:
+        
+        if 가까운 차량이 느린 차량이라고 판별될 때
+          if 가까운 차가 2차선
             self.state = self.return_1
-          elif 앞차가 1차선
+          elif 가까운 차가 1차선
             self.state = self.return_2
+          
+        else:
+          self.state = self.line_change
+          
+    
+      elif len(yolo_list) == 1:
+        g = self.find_closeObstacle_lane(image)
+        
+        if g==2:
+          self.state = self.return_1
+        elif g==1:
+          self.state = self.return_2
+        else:
+          pass
+      else:
+        pass
       
 
     elif self.state == self.return_1:
-      angle = 
+
+      y_a, y_b, y_c = self.find_yellow(image)
+
+      height, width = image.shape[:2]
+
+      # 오른쪽 절반 영역을 검은색(0)으로 설정
+      if len(image.shape) == 3:
+        # 컬러 이미지
+        image[:, width // 2:] = (0, 0, 0)
+
+      else:
+        # 흑백 이미지
+        image[:, width // 2:] = 0
+
+      w_a, w_b, w_c = self.find_white(image)
+      
+
+
+      target1 = 320
+      current1 = ( (-(w_c + w_b * self.height) / w_a) + (-(y_c + y_b * self.height) / y_a) ) / 2
+
+      target2 = 0
+
+      if w_b==0:
+        m_w=0
+      else:
+        m_w = -(w_a/w_b)
+
+      if y_b==0:
+        m_y=0
+      else:
+        m_y = -(y_a/y_b)
+
+      current2 = m_w + m_y
+
+      error1 = target1 - current1
+      error2 = target2 - current2
+      derivative1 = (error1 - prev_error1) / dt if dt > 0 else 0
+
+      angle = Kp1 * error1 + Kd1 * derivative1 - Ka1 * error2
+      prev_error1 = error1
 
 
     elif self.state == self.return_2:
 
+      y_a, y_b, y_c = self.find_yellow(image)
+
+      height, width = image.shape[:2]
+
+      # 왼쪽 절반 영역을 검은색(0)으로 설정
+      if len(image.shape) == 3:
+        # 컬러 이미지
+        image[:, :width // 2] = (0, 0, 0)
+      else:
+        # 흑백 이미지
+        image[:, :width // 2] = 0
+
+
+      w_a, w_b, w_c = self.find_white(image)
+      
+
+
+      target1 = 320
+      current1 = ( (-(w_c + w_b * self.height) / w_a) + (-(y_c + y_b * self.height) / y_a) ) / 2
+
+      target2 = 0
+
+      if w_b==0:
+        m_w=0
+      else:
+        m_w = -(w_a/w_b)
+
+      if y_b==0:
+        m_y=0
+      else:
+        m_y = -(y_a/y_b)
+
+      current2 = m_w + m_y
+
+      error1 = target1 - current1
+      error2 = target2 - current2
+      derivative1 = (error1 - prev_error1) / dt if dt > 0 else 0
+
+      angle = Kp1 * error1 + Kd1 * derivative1 - Ka1 * error2
+      prev_error1 = error1
     
     
     return angle,speed
