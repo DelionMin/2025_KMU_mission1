@@ -14,8 +14,7 @@ from ultralytics import YOLO
 # 3. p제어를 하여 앞바퀴의 각도를 반환한다. 속도는 임의로 설정한다.
 
 #<YOLO 모델 학습 후 추가>
-model = YOLO(os.path.join(os.path.dirname(__file__), "detector.pt"))
-
+model = YOLO("/home/xytron/xycar_ws/src/xycar_drive/xycar_drive/detector.pt")
 
 class ChangeDrive:
   INIT = 0
@@ -54,12 +53,12 @@ class ChangeDrive:
       'car' : 4
     }
 
-    self.confidence_threshold = 6
+    self.confidence_threshold = 0.5
     
     #라이다
-     # 전방 180° 인덱스(505포인트 기준)
+    # 전방 180° 인덱스(505포인트 기준)
     # 전방 30도 272→233 (40개)
-    self._front_indices  = np.arange(272, 232, -1)
+    self._front_indices  = range(272, 232, -1)
     self._centre_front = 124  # front_ranges 배열에서 정면에 해당하는 인덱스 (중앙, 0-based)
 
     #가까운 차량 추종
@@ -120,9 +119,9 @@ class ChangeDrive:
     yellow_count = cv2.countNonZero(mask_yellow)
 
     # 6. 색깔 판별
-    if white_count > yellow_count and white_count > 500:  # 임계치 500 픽셀은 상황에 맞게 조정
+    if white_count > yellow_count and white_count > 200:  # 임계치 500 픽셀은 상황에 맞게 조정
       color_detected = 'white'
-    elif yellow_count > white_count and yellow_count > 500:
+    elif yellow_count > white_count and yellow_count > 200:
       color_detected = 'yellow'
     else:
       color_detected = 'unknown'
@@ -331,6 +330,24 @@ class ChangeDrive:
     }
   ]
     '''
+  def _result_car(self):
+    """
+    YOLO 모델로 상대차량 감지,
+    바운딩 박스 중심점, 넓이, 높이 리스트만 반환
+    """
+    if self._image is None:
+        return []
+
+    try:
+      results = model(self._image, verbose=False)
+
+
+      return results
+
+    except Exception as e:
+      print(f"Error in _detect_car: {e}")
+      return []
+
 
   def find_closeObstacle_lane(self, image):
     '''    {
@@ -370,19 +387,62 @@ class ChangeDrive:
       elif(yellow_x == yolo_x):
         return 0
 
-  def change_lane(self,image):
+  def change_lane(self):
 
+    image = self._image
+    
+    yolo_list = self._detect_car()
+    results = self._result_car()
+    yolo_result = results[0]  # 첫 번째 결과 (단일 이미지 처리 기준)
+    # 시각화를 위한 BGR 이미지 복사
+    image_with_boxes = image.copy()
+
+    # 결과 박스와 라벨 시각화
+    for box in yolo_result.boxes:
+        x1, y1, x2, y2 = map(int, box.xyxy[0])  # 박스 좌표
+        conf = float(box.conf[0])              # 신뢰도
+        cls_id = int(box.cls[0])               # 클래스 ID
+        label = model.names[cls_id]            # 클래스 이름
+
+        # 박스 그리기
+        cv2.rectangle(image_with_boxes, (x1, y1), (x2, y2), (0, 255, 0), 2)
+
+        # 텍스트 라벨
+        text = f"{label} {conf:.2f}"
+        cv2.putText(image_with_boxes, text, (x1, y1 - 10),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+        
+        cv2.putText(
+            image_with_boxes,                 # 이미지
+            f"Image: {self.image}",           # 표시할 텍스트
+            (10, 30),                         # 텍스트 위치 (x, y)
+            cv2.FONT_HERSHEY_SIMPLEX,        # 폰트
+            1,                                # 폰트 크기
+            (0, 255, 0),                      # 색상 (BGR): 초록색
+            2,                                # 두께
+            cv2.LINE_AA                      # 안티앨리어싱
+        )
+    # 노란 차선 표시
+    x1, y1, x2, y2 = self.find_yellow(image)
+    cv2.line(image_with_boxes, (x1, y1), (x2, y2), (0, 255, 0), 2)
+
+    # 이미지 표시 (필요시)
+    cv2.imshow("YOLO Result", image_with_boxes)
+    cv2.waitKey(0)
+    cv2.destroyAllWindows()
     #속도 = 가까운 차 추종
     front_ranges = self._get_front_ranges()
     dist_min = np.min(front_ranges)
     
-    error = dist_min -10 #10 목표 거리
+    error = dist_min -50 # 50 목표 거리
     
     derivative = (error-self.prev_error)/dt if dt >0 else 0
     speed = self.min_Kp * error + self.min_Kd * derivative
         # 이전 오차 저장
     self.prev_error = error
+
     
+    print(self.state)
 
     if self.state == self.INIT:
       Kp1 = 1
@@ -422,8 +482,8 @@ class ChangeDrive:
         else:
           current2 = -(a/b)
 
-        error1 = target1 - current1
-        error2 = target2 - current2
+        error1 = current1 - target1
+        error2 = current2 - target2
         derivative1 = (error1 - prev_error1) / dt if dt > 0 else 0
 
         angle = Kp1 * error1 + Kd1 * derivative1 - Ka1 * error2
@@ -452,7 +512,8 @@ class ChangeDrive:
     elif self.state == self.detect:
       angle = 0
       yolo_list = []
-      yolo_list = self._detect_car()
+
+
 
       if len(yolo_list) == 2:
         self.state = self.line_change
@@ -518,7 +579,6 @@ class ChangeDrive:
     elif self.state == self.return_2:
 
       y_a, y_b, y_c = self.find_yellow(image)
-
       height, width = image.shape[:2]
 
       # 왼쪽 절반 영역을 검은색(0)으로 설정
