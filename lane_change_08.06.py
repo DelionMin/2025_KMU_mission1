@@ -94,7 +94,7 @@ class ChangeDrive:
     self._image = image
     self._ranges = ranges
 
-  def lane_color_detection(image, roi_vertices): # default 상태일 때 앙쪽 차선 색깔 판별
+  def lane_color_detection(self,image, roi_vertices): # default 상태일 때 앙쪽 차선 색깔 판별
     """
     image: BGR 이미지 (OpenCV 읽은 원본)
     roi_vertices: 차선 후보가 있을 것으로 예상되는 다각형 좌표 (np.array 형태)
@@ -136,6 +136,40 @@ class ChangeDrive:
 
     return color_detected
   
+  def detect_current_lane(self,image,width,height):
+    
+    roi_left = np.array([[   # 왼쪽 사다리꼴 절반
+        (width * 0.1, height),
+        (width * 0.3, height * 0.6),
+        (width * 0.5, height * 0.6),
+        (width * 0.5, height)
+    ]], dtype=np.int32)
+    
+
+    # 오른쪽
+    roi_right = np.array([[   # 오른쪽 사다리꼴 절반
+        (width * 0.5, height),
+        (width * 0.5, height * 0.6),
+        (width * 0.7, height * 0.6),
+        (width * 0.9, height)
+    ]], dtype=np.int32)
+    
+    left_color = self.lane_color_detection(image, roi_left)
+    right_color = self.lane_color_detection(image, roi_right)
+
+    if (left_color == 'white') and (right_color == 'yellow'): # 1차선
+      return 1
+    
+    elif (left_color == 'yellow') and (right_color == 'white'): # 2차선
+      return 2
+    
+    elif (left_color == 'white') and (self.right_color == 'white'): # error
+      return 0
+
+    elif (self.left_color == 'yellow') and (self.right_color == 'yellow'): # error
+      return 0
+
+
   def get_best_line(self, lines):
     '''
     입력된 선들 중에서 대푯값 추출
