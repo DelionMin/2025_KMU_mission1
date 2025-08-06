@@ -41,6 +41,10 @@ class ChangeDrive:
     # 현재 차선
     self.lane_constant = 0
 
+    self.y1=0
+    self.y2=0
+    self.x1=0
+    self.x2=0
 
     self.camere_diff = 0.2 # 카메라와 중심 거리
 
@@ -53,7 +57,7 @@ class ChangeDrive:
       'car' : 4
     }
 
-    
+    self.yolo_list = []
     
     #라이다
     # 전방 180° 인덱스(505포인트 기준)
@@ -80,7 +84,7 @@ class ChangeDrive:
 
 
   
-  def get_value(self, image, ranges):
+  def get_value(self, image, ranges, ultrasonic):
     """
     센서 값 받아오기 위한 메소드
     """
@@ -171,7 +175,7 @@ class ChangeDrive:
       best_line = [[x1, y1, x2, y2]]
 
     return best_line
-  
+
   def find_yellow(self,image_yellow): # 노란색 검출 후 직선의 기울기, 절편 반환
       # 노란 이미지 생성
     hsv = cv2.cvtColor(image_yellow, cv2.COLOR_BGR2HSV)
@@ -221,6 +225,11 @@ class ChangeDrive:
     best_yellow_line = self.get_best_line(final_yellow_lines)    
 
     x1, y1, x2, y2 = best_yellow_line[0]
+
+    self.x1=x1
+    self.x2=x2
+    self.y1=y1
+    self.y2=y2
 
 
     # ax + by + c = 0
@@ -406,46 +415,9 @@ class ChangeDrive:
 
     image = self._image
     
-    yolo_list = self._detect_car()
+    self.yolo_list = self._detect_car()
     results = self._result_car()
-    yolo_result = results[0]  # 첫 번째 결과 (단일 이미지 처리 기준)
-    # 시각화를 위한 BGR 이미지 복사
-    image_with_boxes = image.copy()
 
-    # 결과 박스와 라벨 시각화
-    for box in yolo_result.boxes:
-        x1, y1, x2, y2 = map(int, box.xyxy[0])  # 박스 좌표
-        conf = float(box.conf[0])              # 신뢰도
-        cls_id = int(box.cls[0])               # 클래스 ID
-        label = model.names[cls_id]            # 클래스 이름
-
-        # 박스 그리기
-        cv2.rectangle(image_with_boxes, (x1, y1), (x2, y2), (0, 255, 0), 2)
-
-        # 텍스트 라벨
-        text = f"{label} {conf:.2f}"
-        cv2.putText(image_with_boxes, text, (x1, y1 - 10),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
-        
-        cv2.putText(
-            image_with_boxes,                 # 이미지
-            f"Image",           # 표시할 텍스트
-            (10, 30),                         # 텍스트 위치 (x, y)
-            cv2.FONT_HERSHEY_SIMPLEX,        # 폰트
-            1,                                # 폰트 크기
-            (0, 255, 0),                      # 색상 (BGR): 초록색
-            2,                                # 두께
-            cv2.LINE_AA                      # 안티앨리어싱
-        )
-    # 노란 차선 표시
-    x1, y1, x2, y2 = self.find_yellow(image)
-    cv2.line(image_with_boxes, (x1, y1), (x2, y2), (0, 255, 0), 2)
-
-    # 이미지 표시 (필요시)
-    cv2.imshow("YOLO Result", image_with_boxes)
-    cv2.waitKey(0)
-    cv2.destroyAllWindows()
-    
     #속도 = 가까운 차 추종
     center = self._ranges[self._front_indices]
     dist_min = self._get_valid_distance(center)
@@ -527,15 +499,14 @@ class ChangeDrive:
 
     elif self.state == self.detect:
       angle = 0
-      yolo_list = []
 
 
 
-      if len(yolo_list) == 2:
+      if len(self.yolo_list) == 2:
         self.state = self.line_change
           
     
-      elif len(yolo_list) == 1:
+      elif len(self.yolo_list) == 1:
         g = self.find_closeObstacle_lane(image)
         
         if g==2:
@@ -634,7 +605,46 @@ class ChangeDrive:
       angle = Kp1 * error1 + Kd1 * derivative1 - Ka1 * error2
       prev_error1 = error1
     
+    # debug
     
+    yolo_result = results[0]  # 첫 번째 결과 (단일 이미지 처리 기준)
+    # 시각화를 위한 BGR 이미지 복사
+    image_with_boxes = image.copy()
+
+    # 결과 박스와 라벨 시각화
+    for box in yolo_result.boxes:
+      x1, y1, x2, y2 = map(int, box.xyxy[0])  # 박스 좌표
+      conf = float(box.conf[0])              # 신뢰도
+      cls_id = int(box.cls[0])               # 클래스 ID
+      label = model.names[cls_id]            # 클래스 이름
+
+      # 박스 그리기
+      cv2.rectangle(image_with_boxes, (x1, y1), (x2, y2), (0, 255, 0), 2)
+
+      # 텍스트 라벨
+      text = f"{label} {conf:.2f}"
+      cv2.putText(image_with_boxes, text, (x1, y1 - 10),
+                  cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+      
+      cv2.putText(
+        image_with_boxes,                 # 이미지
+        f"Image",           # 표시할 텍스트
+        (10, 30),                         # 텍스트 위치 (x, y)
+        cv2.FONT_HERSHEY_SIMPLEX,        # 폰트
+        1,                                # 폰트 크기
+        (0, 255, 0),                      # 색상 (BGR): 초록색
+        2,                                # 두께
+        cv2.LINE_AA                      # 안티앨리어싱
+      )
+    # 노란 차선 표시
+    x1, y1, x2, y2 = self.x1, self.y1, self.x2, self.y2
+    cv2.line(image_with_boxes, (x1, y1), (x2, y2), (0, 255, 0), 2)
+
+    # 이미지 표시 (필요시)
+    cv2.imshow("YOLO Result", image_with_boxes)
+    cv2.waitKey(0)
+
+
     return angle,speed
 
   def step(self):
