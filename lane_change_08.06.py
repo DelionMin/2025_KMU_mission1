@@ -197,6 +197,9 @@ class ChangeDrive:
     yellow_lines = cv2.HoughLinesP(yellow_edges, rho=1, theta=np.pi/180, threshold=80,
                             minLineLength=50, maxLineGap=10)
 
+    if not yellow_lines:
+      return 0,0,0
+    
     # 왼쪽, 오른쪽 차선 넣어둘 리스트
     final_yellow_lines = []
 
@@ -251,7 +254,8 @@ class ChangeDrive:
     white_lines = cv2.HoughLinesP(white_edges, rho=1, theta=np.pi/180, threshold=80,
                             minLineLength=50, maxLineGap=10)
 
-
+    if not white_lines:
+      return 0,0,0
 
     # 왼쪽, 오른쪽 차선 넣어둘 리스트
     final_white_lines = []
