@@ -72,6 +72,9 @@ class ChangeDrive:
     self.min_Kd = 3 # 미분
     self.min_dt = 0.1
     
+    self.error = 0
+
+
     #카메라 노출값 조정
     os.system('v4l2-ctl -d /dev/videoCAM -c auto_exposure=1')
   
@@ -413,6 +416,8 @@ class ChangeDrive:
 
   def change_lane(self):
 
+
+#-------------------------------------- 속도 pid 제어
     image = self._image
     
     self.yolo_list = self._detect_car()
@@ -422,15 +427,17 @@ class ChangeDrive:
     center = self._ranges[self._front_indices]
     dist_min = self._get_valid_distance(center)
     
-    error = dist_min -50 # 50 목표 거리
+    self.error = dist_min -50 # 50 목표 거리
     
-    derivative = (error-self.prev_error)
-    speed = self.min_Kp * error + self.min_Kd * derivative
+    derivative = (self.error-self.prev_error)
+    speed = self.min_Kp * self.error + self.min_Kd * derivative
         # 이전 오차 저장
-    self.prev_error = error
+    self.prev_error = self.error
 
-    
-    print(self.state)
+  
+#------------------------------------------------- state masine 시작
+
+#------------------------------------------------- init state
 
     if self.state == self.INIT:
       
@@ -440,53 +447,50 @@ class ChangeDrive:
       Ka_center = 3 # 각도비례
       prev_error_center = 0
       derivative_center = 0
-      
+      error1_center = 0
+      error2_center = 0
+
+
       #조향 pid
       Kp_angle = 1
       Kd_angle = 3 # 미분
       Ka_angle = 3 # 각도비례
       prev_error_angle = 0
       derivative_angle = 0
+      error1_angle = 0
+      error2_angle = 0
 
       self.height, self.width = image.shape[:2]
       angle = 0
       if (self.height>0) and (self.width>0):
         self.state = self.line_change
 
+# -------------------------------------------------- line_change state
 
     elif self.state == self.line_change:
       a,b,c = self.find_yellow(image)
   
-
-
-        # PD 제어 구현 ->  선 위치 맞추기, 선 각도 , 라이다나 옆차선 차량 유무 확인
+      # PD 제어 구현 ->  선 위치 맞추기, 선 각도 , 라이다나 옆차선 차량 유무 확인
       
-
-      
-
       # 위치 맞추기 pid
 
-        
-      
+
       if not ((self.width/2-10)<(-(c+b*self.height)/a)<(self.width/2+10)):
-        target1 = 320
-        current1 = (-(c+b*self.height)/a)
-        target2 = 0
+        target1_center = 320
+        current1_center = (-(c+b*self.height)/a)
+        target2_center = 0
 
         if b==0:
-          current2=0
+          current2_center=0
         else:
-          current2 = -(a/b)
+          current2_center = -(a/b)
 
-        error1 = target1 - current1
-        error2 = target2 - current2
-        derivative_center = (error1 - prev_error_center) 
+        error1_center = target1_center - current1_center
+        error2_center = target2_center - current2_center
+        derivative_center = (error1_center - prev_error_center) 
 
-        angle = Kp_center * error1 + Kd_center * derivative_center - Ka_center * error2
-        prev_error_center = error1
-
-
-
+        angle = Kp_center * error1_center + Kd_center * derivative_center - Ka_center * error2_center
+        prev_error_center = error1_center
 
 
       a,b,c = self.find_yellow(image)
@@ -503,7 +507,7 @@ class ChangeDrive:
       elif ((self.width/2-10)<(-(c+b*self.height)/a)<(self.width/2+10)) and ((self.width/2-10)<(-c/a)<(self.width/2+10)):
         self.state = self.detect
 
-
+# -------------------------------------------------- detect state
 
     elif self.state == self.detect:
       angle = 0
@@ -526,6 +530,7 @@ class ChangeDrive:
       else:
         pass
       
+# -------------------------------------------------- return_1 state
 
     elif self.state == self.return_1:
 
@@ -545,11 +550,12 @@ class ChangeDrive:
       w_a, w_b, w_c = self.find_white(image)
       
 
+      #pid 시작
 
-      target1 = 320
-      current1 = ( (-(w_c + w_b * self.height) / w_a) + (-(y_c + y_b * self.height) / y_a) ) / 2
+      target1_angle = 320
+      current1_angle = ( (-(w_c + w_b * self.height) / w_a) + (-(y_c + y_b * self.height) / y_a) ) / 2
 
-      target2 = 0
+      target2_angle = 0
 
       if w_b==0:
         m_w=0
@@ -561,15 +567,16 @@ class ChangeDrive:
       else:
         m_y = -(y_a/y_b)
 
-      current2 = m_w + m_y
+      current2_angle = m_w + m_y
 
-      error1 = target1 - current1
-      error2 = target2 - current2
-      derivative_angle = (error1 - prev_error_angle) 
+      error1_angle = target1_angle - current1_angle
+      error2_angle = target2_angle - current2_angle
+      derivative_angle = (error1_angle - prev_error_angle) 
 
-      angle = Kp_angle * error1 + Kd_angle * derivative_angle - Ka_angle * error2
-      prev_error_angle = error1
+      angle = Kp_angle * error1_angle + Kd_angle * derivative_angle - Ka_angle * error2_angle
+      prev_error_angle = error1_angle
 
+# -------------------------------------------------- return_2 state
 
     elif self.state == self.return_2:
 
@@ -587,12 +594,13 @@ class ChangeDrive:
 
       w_a, w_b, w_c = self.find_white(image)
       
+      
+      #pid 시작
 
+      target1_angle = 320
+      current1_angle = ( (-(w_c + w_b * self.height) / w_a) + (-(y_c + y_b * self.height) / y_a) ) / 2
 
-      target1 = 320
-      current1 = ( (-(w_c + w_b * self.height) / w_a) + (-(y_c + y_b * self.height) / y_a) ) / 2
-
-      target2 = 0
+      target2_angle = 0
 
       if w_b==0:
         m_w=0
@@ -604,14 +612,14 @@ class ChangeDrive:
       else:
         m_y = -(y_a/y_b)
 
-      current2 = m_w + m_y
+      current2_angle = m_w + m_y
 
-      error1 = target1 - current1
-      error2 = target2 - current2
-      derivative_angle = (error1 - prev_error_angle) 
+      error1_angle = target1_angle - current1_angle
+      error2_angle = target2_angle - current2_angle
+      derivative_angle = (error1_angle - prev_error_angle) 
 
-      angle = Kp_angle * error1 + Kd_angle * derivative_angle - Ka_angle * error2
-      prev_error_angle = error1
+      angle = Kp_angle * error1_angle + Kd_angle * derivative_angle - Ka_angle * error2_angle
+      prev_error_angle = error1_angle
     
     # debug
     
@@ -645,8 +653,57 @@ class ChangeDrive:
 
 
     return angle,speed
+  
+  def test(self):
+    image = self._image
+    
+    angle = 0
+
+    self.yolo_list = self._detect_car()
+    results = self._result_car()
+
+    #속도 = 가까운 차 추종
+    center = self._ranges[self._front_indices]
+    dist_min = self._get_valid_distance(center)
+    
+    error = dist_min -50 # 50 목표 거리
+    
+    derivative = (error-self.prev_error)
+    speed = self.min_Kp * error + self.min_Kd * derivative
+        # 이전 오차 저장
+    self.prev_error = error
+
+
+    # debug
+
+    yolo_result = results[0]  # 첫 번째 결과 (단일 이미지 처리 기준)
+    # 시각화를 위한 BGR 이미지 복사
+
+
+    # 결과 박스와 라벨 시각화
+    for box in yolo_result.boxes:
+      x1, y1, x2, y2 = map(int, box.xyxy[0])  # 박스 좌표
+      conf = float(box.conf[0])              # 신뢰도
+      cls_id = int(box.cls[0])               # 클래스 ID
+      label = model.names[cls_id]            # 클래스 이름
+
+      # 박스 그리기
+      cv2.rectangle(image, (x1, y1), (x2, y2), (0, 255, 0), 2)
+
+      # 텍스트 라벨
+      text = f"{label} {conf:.2f}"
+      cv2.putText(image, text, (x1, y1 - 10),
+                  cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+      
+    x1, y1, x2, y2 = self.x1, self.y1, self.x2, self.y2
+    cv2.line(image, (x1, y1), (x2, y2), (0, 255, 0), 2)
+
+    cv2.imshow("YOLO Result", image)
+
+
+    return angle,speed
 
   def step(self):
     
-    angle, speed = self.change_lane()
+    angle, speed = self.test()
     return angle, speed
