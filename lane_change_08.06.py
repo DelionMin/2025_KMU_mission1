@@ -736,8 +736,7 @@ class ChangeDrive:
       cv2.putText(image, text, (x1, y1 - 10),
                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
       
-    x1, y1, x2, y2 = self.x1, self.y1, self.x2, self.y2
-    cv2.line(image, (x1, y1), (x2, y2), (0, 255, 0), 2)
+    cv2.line(image, (self.x1, self.y1), (self.x2, self.y2), (0, 255, 0), 2)
 
     cv2.imshow("YOLO Result", image)
 
