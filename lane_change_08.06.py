@@ -746,6 +746,44 @@ class ChangeDrive:
 
     return angle,speed
 
+  def test2(self):
+
+    image = self._image
+
+    speed = 5
+
+          #중앙선 따라가는 pid
+    Kp_center = 1
+    Kd_center = 3 # 미분
+    Ka_center = 3 # 각도비례
+
+    a,b,c = self.find_yellow(image)
+
+    # PD 제어 구현 ->  선 위치 맞추기, 선 각도 , 라이다나 옆차선 차량 유무 확인
+    
+    # 위치 맞추기 pid
+
+
+    if not ((self.width/2-10)<(-(c+b*self.height)/a)<(self.width/2+10)):
+      target1_center = 320
+      current1_center = (-(c+b*self.height)/a)
+      target2_center = 0
+
+      if b==0:
+        current2_center=0
+      else:
+        current2_center = -(a/b)
+
+      error1_center = target1_center - current1_center
+      error2_center = target2_center - current2_center
+      derivative_center = (error1_center - prev_error_center) 
+
+      angle = Kp_center * error1_center + Kd_center * derivative_center - Ka_center * error2_center
+      prev_error_center = error1_center
+    
+
+    return angle, speed
+
   def step(self):
     
     angle, speed = self.test()
