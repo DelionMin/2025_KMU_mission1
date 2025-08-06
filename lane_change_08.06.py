@@ -424,7 +424,7 @@ class ChangeDrive:
     
     error = dist_min -50 # 50 목표 거리
     
-    derivative = (error-self.prev_error)/dt if dt >0 else 0 #dt 필요 X
+    derivative = (error-self.prev_error)
     speed = self.min_Kp * error + self.min_Kd * derivative
         # 이전 오차 저장
     self.prev_error = error
@@ -433,12 +433,20 @@ class ChangeDrive:
     print(self.state)
 
     if self.state == self.INIT:
-      Kp1 = 1
-      Kd1 = 3 # 미분
-      Ka1 = 3 # 각도비례
-      dt = 0.1
-      prev_error1 = 0
-      derivative1 = 0
+      
+      #중앙선 따라가는 pid
+      Kp_center = 1
+      Kd_center = 3 # 미분
+      Ka_center = 3 # 각도비례
+      prev_error_center = 0
+      derivative_center = 0
+      
+      #조향 pid
+      Kp_angle = 1
+      Kd_angle = 3 # 미분
+      Ka_angle = 3 # 각도비례
+      prev_error_angle = 0
+      derivative_angle = 0
 
       self.height, self.width = image.shape[:2]
       angle = 0
@@ -472,10 +480,10 @@ class ChangeDrive:
 
         error1 = target1 - current1
         error2 = target2 - current2
-        derivative1 = (error1 - prev_error1) / dt if dt > 0 else 0
+        derivative_center = (error1 - prev_error_center) 
 
-        angle = Kp1 * error1 + Kd1 * derivative1 - Ka1 * error2
-        prev_error1 = error1
+        angle = Kp_center * error1 + Kd_center * derivative_center - Ka_center * error2
+        prev_error_center = error1
 
 
 
@@ -557,10 +565,10 @@ class ChangeDrive:
 
       error1 = target1 - current1
       error2 = target2 - current2
-      derivative1 = (error1 - prev_error1) / dt if dt > 0 else 0
+      derivative_angle = (error1 - prev_error_angle) 
 
-      angle = Kp1 * error1 + Kd1 * derivative1 - Ka1 * error2
-      prev_error1 = error1
+      angle = Kp_angle * error1 + Kd_angle * derivative_angle - Ka_angle * error2
+      prev_error_angle = error1
 
 
     elif self.state == self.return_2:
@@ -600,10 +608,10 @@ class ChangeDrive:
 
       error1 = target1 - current1
       error2 = target2 - current2
-      derivative1 = (error1 - prev_error1) / dt if dt > 0 else 0
+      derivative_angle = (error1 - prev_error_angle) 
 
-      angle = Kp1 * error1 + Kd1 * derivative1 - Ka1 * error2
-      prev_error1 = error1
+      angle = Kp_angle * error1 + Kd_angle * derivative_angle - Ka_angle * error2
+      prev_error_angle = error1
     
     # debug
     
