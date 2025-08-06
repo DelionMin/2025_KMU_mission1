@@ -92,7 +92,8 @@ class ChangeDrive:
     센서 값 받아오기 위한 메소드
     """
     self._image = image
-    self._ranges = ranges
+    self._ranges = np.array(ranges) if not isinstance(ranges, np.ndarray) else ranges
+
 
   def lane_color_detection(self,image, roi_vertices): # default 상태일 때 앙쪽 차선 색깔 판별
     """
@@ -691,6 +692,8 @@ class ChangeDrive:
   def test(self):
     image = self._image
     
+    _, _, _, =self.find_yellow(image)
+    
     angle = 0
 
     self.yolo_list = self._detect_car()
@@ -700,10 +703,14 @@ class ChangeDrive:
     center = self._ranges[self._front_indices]
     dist_min = self._get_valid_distance(center)
     
-    error = dist_min -50 # 50 목표 거리
+    error = dist_min -1 # 1 목표 거리
     
     derivative = (error-self.prev_error)
+    
     speed = self.min_Kp * error + self.min_Kd * derivative
+    if speed <0:
+      speed = 0
+      
         # 이전 오차 저장
     self.prev_error = error
 
