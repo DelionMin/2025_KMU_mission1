@@ -626,16 +626,7 @@ class ChangeDrive:
       cv2.putText(image_with_boxes, text, (x1, y1 - 10),
                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
       
-      cv2.putText(
-        image_with_boxes,                 # 이미지
-        f"Image",           # 표시할 텍스트
-        (10, 30),                         # 텍스트 위치 (x, y)
-        cv2.FONT_HERSHEY_SIMPLEX,        # 폰트
-        1,                                # 폰트 크기
-        (0, 255, 0),                      # 색상 (BGR): 초록색
-        2,                                # 두께
-        cv2.LINE_AA                      # 안티앨리어싱
-      )
+
     # 노란 차선 표시
     x1, y1, x2, y2 = self.x1, self.y1, self.x2, self.y2
     cv2.line(image_with_boxes, (x1, y1), (x2, y2), (0, 255, 0), 2)
