@@ -239,7 +239,7 @@ class ChangeDrive:
     yellow_lines = cv2.HoughLinesP(yellow_edges, rho=1, theta=np.pi/180, threshold=80,
                             minLineLength=50, maxLineGap=10)
 
-    if not yellow_lines:
+    if yellow_lines is None:
       return 0,0,0
     
     # 왼쪽, 오른쪽 차선 넣어둘 리스트
@@ -250,7 +250,7 @@ class ChangeDrive:
 
 
       if x1 == x2 and y1 == y2:
-        pass
+        continue
 
       
       # ***< 영상처리 시 Y값의 경우 아래로 갈수록 커진다는 점 유의 >***
@@ -301,7 +301,7 @@ class ChangeDrive:
     white_lines = cv2.HoughLinesP(white_edges, rho=1, theta=np.pi/180, threshold=80,
                             minLineLength=50, maxLineGap=10)
 
-    if not white_lines:
+    if white_lines is None:
       return 0,0,0
 
     # 왼쪽, 오른쪽 차선 넣어둘 리스트
@@ -312,7 +312,7 @@ class ChangeDrive:
 
 
       if x1 == x2 and y1 == y2:
-        pass
+        continue
 
       
       # ***< 영상처리 시 Y값의 경우 아래로 갈수록 커진다는 점 유의 >***
