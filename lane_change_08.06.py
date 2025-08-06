@@ -31,6 +31,8 @@ class ChangeDrive:
     self.height = 0
     self.width = 0
 
+    self.height_frame = 480 
+
     # 가장 최근에 인식된 best_line (buffer)
     self.best_line_left_prev = None
     self.best_line_right_prev = None
@@ -58,7 +60,7 @@ class ChangeDrive:
     }
 
     self.yolo_list = []
-    
+
     #라이다
     # 전방 180° 인덱스(505포인트 기준)
     # 전방 30도 272→233 (40개)
@@ -68,16 +70,17 @@ class ChangeDrive:
     
     #가까운 차량 추종
     self.prev_error = 0
-    self.min_Kp = 1
-    self.min_Kd = 3 # 미분
-    self.min_dt = 0.1
-    
+    self.min_Kp = 0.25
+    self.min_Kd = 0.75 # 미분
+
+    # TO BE TUNED
+    self.scaling_factor = 120
+
     self.error = 0
 
 
     #카메라 노출값 조정
     os.system('v4l2-ctl -d /dev/videoCAM -c auto_exposure=1')
-  
     
     
   def _get_front_ranges(self):
@@ -707,7 +710,7 @@ class ChangeDrive:
     
     derivative = (error-self.prev_error)
     
-    speed = self.min_Kp * error + self.min_Kd * derivative
+    speed = int((self.min_Kp * error + self.min_Kd * derivative) * self.scaling_factor)
     if speed <0:
       speed = 0
       
@@ -742,47 +745,14 @@ class ChangeDrive:
 
 
     return angle,speed
-  
-  def test2(self):
-
-    image = self._image
-
-    speed = 5
-
-          #중앙선 따라가는 pid
-    Kp_center = 1
-    Kd_center = 3 # 미분
-    Ka_center = 3 # 각도비례
-
-    a,b,c = self.find_yellow(image)
-
-    # PD 제어 구현 ->  선 위치 맞추기, 선 각도 , 라이다나 옆차선 차량 유무 확인
-    
-    # 위치 맞추기 pid
-
-
-    if not ((self.width/2-10)<(-(c+b*self.height)/a)<(self.width/2+10)):
-      target1_center = 320
-      current1_center = (-(c+b*self.height)/a)
-      target2_center = 0
-
-      if b==0:
-        current2_center=0
-      else:
-        current2_center = -(a/b)
-
-      error1_center = target1_center - current1_center
-      error2_center = target2_center - current2_center
-      derivative_center = (error1_center - prev_error_center) 
-
-      angle = Kp_center * error1_center + Kd_center * derivative_center - Ka_center * error2_center
-      prev_error_center = error1_center
-    
-
-    return angle, speed
 
   def step(self):
     
     angle, speed = self.test()
     #angle, speed = self.change_lane()
+
+  
+    
+    print(f"speed : {speed}")
+    
     return angle, speed
