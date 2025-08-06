@@ -692,7 +692,7 @@ class ChangeDrive:
   def test(self):
     image = self._image
     
-    _, _, _, =self.find_yellow(image)
+    _, _, _ =self.find_yellow(image)
     
     angle = 0
 
