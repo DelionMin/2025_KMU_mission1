@@ -642,7 +642,7 @@ class ChangeDrive:
 
     # 이미지 표시 (필요시)
     cv2.imshow("YOLO Result", image_with_boxes)
-    cv2.waitKey(0)
+    # cv2.waitKey(0)
 
 
     return angle,speed
