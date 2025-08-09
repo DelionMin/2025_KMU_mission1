@@ -16,39 +16,37 @@ from ultralytics import YOLO
 #<YOLO 모델 학습 후 추가>
 model = YOLO("/home/xytron/xycar_ws/src/xycar_drive/xycar_drive/detector.pt")
 
-class ChangeDrive:
-  INIT = 0
-  line_change = 1
-  detect = 2
-  return_1 = 3
-  return_2 = 4
-  sidedrive_1 = 5
-  sidedrive_2 = 6
+class ChangeDrive:     # change lane 클래스
+  INIT = 0             # 초기 설정 state
+  yello_follow = 1      # 중앙선 추종 state
+  detect = 2           # 분기 계산 state
+  return_1 = 3         # 1차선 복귀 state
+  return_2 = 4         # 2차선 복귀 state
+  sidedrive_1 = 5      # 1차선 주행 중인데 2차선에 방해차량이 있는 case
+  sidedrive_2 = 6      # 2차선 주행 중인데 1차선에 방해차량이 있는 case
   
   def __init__(self) -> None:
     # 차선 인식 시 사용할 기울기 THRESHOLDS
     # TO BE TUNED
-    self.THRESHOLD_SLOPE = 0.6
-    self.height = 0
-    self.width = 0
-
-    self.height_frame = 480 
-
-    # 가장 최근에 인식된 best_line (buffer)
-    self.best_line_left_prev = None
-    self.best_line_right_prev = None
     
-    self.state = self.INIT
+    self.height = 0                 # 화면 높이
+    self.width = 0                  # 화면 너비
 
-    # 현재 차선
-    self.lane_constant = 0
+    
+    self.state = self.INIT           # init state 로 시작
 
+    self.lane_constant = 0           # 현재 차선
+
+    # 노란 선 좌표 버퍼
     self.y1=0
     self.y2=0
     self.x1=0
     self.x2=0
 
-    self.camere_diff = 0.2 # 카메라와 중심 거리
+
+    self.camere_diff = 0.2           # 카메라와 중심 거리 (일단 사용x)
+    self.THRESHOLD_SLOPE = 0.6       # 기울기 threshold (일단 사용x)
+
 
     # 클래스 ID 매핑 (detector.pt 모델에 따라 조정 필요)
     self.class_names = {
@@ -59,25 +57,30 @@ class ChangeDrive:
       'car' : 4
     }
 
+    # yolo 객체 배열
     self.yolo_list = []
 
-    #라이다
+
+    # 라이다
     # 전방 180° 인덱스(505포인트 기준)
     # 전방 30도 272→233 (40개)
-    self.MIN_VALID_DISTANCE = 0.01  # 최소 유효 거리 [m]
-    self.confidence_threshold = 0.6
+    self.MIN_VALID_DISTANCE = 0.01                 # 최소 유효 거리 [m]
+    self.confidence_threshold = 0.6                # yolo threshold
     self._front_indices = np.arange(283, 221, -1)  # 258‥247 (12)
     
-    #가까운 차량 추종
-    self.prev_error = 0
-    self.min_Kp = 0.25
-    self.min_Kd = 0.75 # 미분
 
-    # TO BE TUNED
+
+
+    #가까운 차량 추종 pid 계수
+
+    self.min_Kp = 0.25
+    self.min_Kd = 0.75
+
+    # scaling factor
     self.scaling_factor = 120
 
     self.error = 0
-
+    self.prev_error = 0
 
     #카메라 노출값 조정
     os.system('v4l2-ctl -d /dev/videoCAM -c auto_exposure=1')
@@ -87,18 +90,18 @@ class ChangeDrive:
     """전방 배열(front_ranges, 길이 40)을 반환."""
     front_range = self._ranges[self._front_indices]
     return front_range  # 길이 40
-
-
   
-  def get_value(self, image, ranges, ultrasonic):
+  def get_value(self, image, ranges, ultrasonic): # detecter 에서 센서 값을 받아옴
     """
     센서 값 받아오기 위한 메소드
     """
     self._image = image
     self._ranges = np.array(ranges) if not isinstance(ranges, np.ndarray) else ranges
 
+  def lane_color_detection(self,image, roi_vertices): # 차선 색깔 판별
+    # 입력 : image, 특정 구역을 가리키는 roi
+    # 출력 : white, yellow, unknown 중 해당하는 문자열
 
-  def lane_color_detection(self,image, roi_vertices): # default 상태일 때 앙쪽 차선 색깔 판별
     """
     image: BGR 이미지 (OpenCV 읽은 원본)
     roi_vertices: 차선 후보가 있을 것으로 예상되는 다각형 좌표 (np.array 형태)
@@ -116,12 +119,12 @@ class ChangeDrive:
     # 2. BGR → HSV 변환
     hsv = cv2.cvtColor(roi_image, cv2.COLOR_BGR2HSV)
 
-    # 3. 흰색 범위 (Hue 무관, 낮은 채도, 높은 명도)
+    # 3. 흰색 범위 (Hue 무관, 낮은 채도, 높은 명도) / 상수값 조정 필요
     lower_white = np.array([0, 0, 200])
     upper_white = np.array([180, 30, 255])
     mask_white = cv2.inRange(hsv, lower_white, upper_white)
 
-    # 4. 노란색 범위 (Hue 약 20~30, 채도 높음, 명도 중간 이상)
+    # 4. 노란색 범위 (Hue 약 20~30, 채도 높음, 명도 중간 이상) / 상수값 조정 필요
     lower_yellow = np.array([20, 100, 100])
     upper_yellow = np.array([30, 255, 255])
     mask_yellow = cv2.inRange(hsv, lower_yellow, upper_yellow)
@@ -131,17 +134,25 @@ class ChangeDrive:
     yellow_count = cv2.countNonZero(mask_yellow)
 
     # 6. 색깔 판별
-    if white_count > yellow_count and white_count > 200:  # 임계치 500 픽셀은 상황에 맞게 조정
-      color_detected = 'white'
+    if white_count > yellow_count and white_count > 200:      # 임계치 200 픽셀은 상황에 맞게 조정
+      color_detected = 'white'                                # 흰차선
+
     elif yellow_count > white_count and yellow_count > 200:
-      color_detected = 'yellow'
+      color_detected = 'yellow'                               # 노란차선
+
     else:
-      color_detected = 'unknown'
+      color_detected = 'unknown'                              # 재판별 요망
 
     return color_detected
   
-  def detect_current_lane(self,image,width,height):
-    
+  def detect_current_lane(self,image,width,height):   # 차량의 현재 차선 반환
+
+    # 양 쪽 차선의 색깔을 lane_color_detection 함수를 통해 구한 뒤 차선 정보 반환
+    # 입력 : image, 카메라 너비, 카메로 높이
+    # 출력 : 현재 차선에 해당하는 숫자
+
+
+    # 왼쪽 roi
     roi_left = np.array([[   # 왼쪽 사다리꼴 절반
         (width * 0.1, height),
         (width * 0.3, height * 0.6),
@@ -150,7 +161,7 @@ class ChangeDrive:
     ]], dtype=np.int32)
     
 
-    # 오른쪽
+    # 오른쪽 roi
     roi_right = np.array([[   # 오른쪽 사다리꼴 절반
         (width * 0.5, height),
         (width * 0.5, height * 0.6),
@@ -158,8 +169,8 @@ class ChangeDrive:
         (width * 0.9, height)
     ]], dtype=np.int32)
     
-    left_color = self.lane_color_detection(image, roi_left)
-    right_color = self.lane_color_detection(image, roi_right)
+    left_color = self.lane_color_detection(image, roi_left)    # 왼쪽 차선 색
+    right_color = self.lane_color_detection(image, roi_right)  # 오른쪽 차선 색
 
     if (left_color == 'white') and (right_color == 'yellow'): # 1차선
       return 1
@@ -174,7 +185,7 @@ class ChangeDrive:
       return 0
 
 
-  def get_best_line(self, lines):
+  def get_best_line(self, lines): # lane drive에서 가져옴
     '''
     입력된 선들 중에서 대푯값 추출
     gets: [[x1, y1, x2, y2], [x1, y1, x2, y2], ...]
@@ -205,7 +216,7 @@ class ChangeDrive:
     
     if m_left != 0.0:
       y1 = 0
-      y2 = self.height_frame    
+      y2 = self.height 
       '''
       y1, y2 실제 주행 환경에서는 값 맞춰서 바꾸기
       '''
@@ -217,8 +228,12 @@ class ChangeDrive:
 
     return best_line
 
-  def find_yellow(self,image_yellow): # 노란색 검출 후 직선의 기울기, 절편 반환
-      # 노란 이미지 생성
+  def find_yellow(self,image_yellow): # 노란색 직선 검출 후 직선 상수 반환, 일단 동작 확인함
+
+    # 입력 : image
+    # 출력 : 추출한 노란색 차선의 a, b, c 값 (ax+by+c=0)
+    
+    # 노란 이미지 생성
     hsv = cv2.cvtColor(image_yellow, cv2.COLOR_BGR2HSV)
     
     # 노란색 범위 정의 (Hue: 20~30, Saturation: 100~255, Value: 100~255)
@@ -242,45 +257,51 @@ class ChangeDrive:
     yellow_lines = cv2.HoughLinesP(yellow_edges, rho=1, theta=np.pi/180, threshold=80,
                             minLineLength=50, maxLineGap=10)
 
-    if yellow_lines is None:
+    if yellow_lines is None:   # 차선을 찾지 못하면 0,0,0 반환
       return 0,0,0
     
     # 왼쪽, 오른쪽 차선 넣어둘 리스트
     final_yellow_lines = []
 
     for line in yellow_lines:
-      x1, y1, x2, y2 = line[0]
+      x1, y1, x2, y2 = line[0]     # 직선 좌표 추출
 
 
-      if x1 == x2 and y1 == y2:
+      if x1 == x2 and y1 == y2:    # 두 점이 같은 점을 가리키면 패스
         continue
 
       
       # ***< 영상처리 시 Y값의 경우 아래로 갈수록 커진다는 점 유의 >***
     
-      final_yellow_lines.append(line)
+      final_yellow_lines.append(line)  # final 리스트에 추가
 
-    if not final_yellow_lines:
+    if not final_yellow_lines:     # final 리스트가 비었다면 0,0,0 반환
       return 0,0,0
 
-    best_yellow_line = self.get_best_line(final_yellow_lines)    
+    best_yellow_line = self.get_best_line(final_yellow_lines)  # 가장 바람직한 차선 추출
 
-    x1, y1, x2, y2 = best_yellow_line[0]
+    x1, y1, x2, y2 = best_yellow_line[0]                       # 추출한 차선의 좌표 지정
+
+    # 좌표들을 버퍼에 저장
 
     self.x1=x1
     self.x2=x2
     self.y1=y1
     self.y2=y2
 
-
+    # 좌표로부터 a,b,c 값 추출
     # ax + by + c = 0
     a = y1 - y2
     b = x2 - x1
     c = x1 * y2 - x2 * y1
+
     return a, b, c
     
-  def find_white(self,image_white): # 하얀색 검출 후 직선의 기울기, 절편 반환
-      # 하얀 이미지 생성
+  def find_white(self,image_white): # 흰색 직선 검출 후 직선 상수 반환, 일단 동작 확인함
+    # 입력 : image
+    # 출력 : 추출한 흰색 차선의 a, b, c 값 (ax+by+c=0)
+    
+    # 하얀 이미지 생성
     hsv = cv2.cvtColor(image_white, cv2.COLOR_BGR2HSV)
     
 
@@ -304,36 +325,38 @@ class ChangeDrive:
     white_lines = cv2.HoughLinesP(white_edges, rho=1, theta=np.pi/180, threshold=80,
                             minLineLength=50, maxLineGap=10)
 
-    if white_lines is None:
+    if white_lines is None:   # 차선을 찾지 못하면 0,0,0 반환
       return 0,0,0
 
     # 왼쪽, 오른쪽 차선 넣어둘 리스트
     final_white_lines = []
 
     for line in white_lines:
-      x1, y1, x2, y2 = line[0]
+      x1, y1, x2, y2 = line[0]    # 직선 좌표 추출
 
 
-      if x1 == x2 and y1 == y2:
+      if x1 == x2 and y1 == y2:   # 두 점이 같은 점을 가리키면 패스
         continue
 
       
       # ***< 영상처리 시 Y값의 경우 아래로 갈수록 커진다는 점 유의 >***
     
-      final_white_lines.append(line)
+      final_white_lines.append(line)  # final 리스트에 추가
 
-    if not final_white_lines:
+    if not final_white_lines:     # final 리스트가 비었다면 0,0,0 반환
       return 0,0,0
 
-    best_white_line = self.get_best_line(final_white_lines)    
+    best_white_line = self.get_best_line(final_white_lines)    # 가장 바람직한 차선 추출
 
-    x1, y1, x2, y2 = best_white_line[0]
+    x1, y1, x2, y2 = best_white_line[0]                        # 추출한 차선의 좌표 지정
 
 
+    # 좌표로부터 a,b,c 값 추출
     # ax + by + c = 0
     a = y1 - y2
     b = x2 - x1
     c = x1 * y2 - x2 * y1
+
     return a, b, c
 
   def _detect_car(self):
@@ -406,8 +429,11 @@ class ChangeDrive:
       print(f"Error in _detect_car: {e}")
       return []
 
+  def find_closeObstacle_lane(self, image): # 장애물 차량의 차선 정보를 판별 / 검증 필요
+    # yolo의 좌표와 장애물의 좌표를 비교해 차선정보 추출
+    # 입력 : image
+    # 출력 : 장애물이 위치한 차선 숫자
 
-  def find_closeObstacle_lane(self, image):
     '''    {
         'center': [190.65, 270.45],
         'width': 140.5,
@@ -417,23 +443,26 @@ class ChangeDrive:
   yolo = [100, 100, 100, 100] #알아서 yolo로 받아오기
 
     '''
-    yolo = self._detect_car()
-    yolo_y = yolo['center'][1]     
-    yolo_x = yolo['center'][0]
-    yolo_width = yolo['width']
-    yolo_height = yolo['height']
+    yolo = self._detect_car()       # yolo 객체 받아오기
+    yolo_y = yolo['center'][1]      # yolo로 인식한 차량의 y 좌표 추출
+    yolo_x = yolo['center'][0]      # yolo로 인식한 차량의 x 좌표 추출
+    yolo_width = yolo['width']      # yolo로 인식한 차량의 너비 추출
+    yolo_height = yolo['height']    # yolo로 인식한 차량의 높이 추출
 
-    a,b,c = self.find_yellow(image)
+    a,b,c = self.find_yellow(image) # 노란 직선 계산
+    
+    if a==0 and b==0 and c==0:      # 직선을 찾지 못하면 0 반환
+      return 0
   
-    if b == 0:
+    if b == 0:                      # b==0 이면 ax+c=0 꼴의 직선이므로 x=-(c/a)
       yellow_x = -(c/a)
 
-    elif a == 0:
+    elif a == 0:                    # a==0 이면 by+c=0 꼴의 직선이므로 오류, 재판단
       return 0
 
-    elif (a/b) != 0:
-      k = yolo_y + yolo_height//2
-      yellow_x = (-c-b*k)/a
+    elif (a/b) != 0:                # 기울기(-a/b)가 0이 아닌 일반적인 직선일때
+      car_mid_y = yolo_y + yolo_height//2   # 차량의 밑바닥 중앙 y좌표 계산
+      yellow_x = (-c-b*car_mid_y)/a         # 위 좌표와 같은 높이의 노란차선 x좌표 계산
 
 
       if (yellow_x > yolo_x): # 1차선
@@ -442,7 +471,7 @@ class ChangeDrive:
       elif(yellow_x < yolo_x): #2차선
         return 2
       
-      elif(yellow_x == yolo_x):
+      elif(yellow_x == yolo_x): #재판별 요망
         return 0
 
   def _get_valid_distance(self, ranges_subset):
@@ -454,13 +483,12 @@ class ChangeDrive:
 
   def change_lane(self):
 
-
-#-------------------------------------- 속도 pid 제어
     image = self._image
-    
     self.yolo_list = self._detect_car()
     results = self._result_car()
 
+#-------------------------------------- 속도 pid 제어 / 해당 코드는 어떤 state던지 계속 돌아감
+    
     #속도 = 가까운 차 추종
     center = self._ranges[self._front_indices]
     dist_min = self._get_valid_distance(center)
@@ -476,15 +504,16 @@ class ChangeDrive:
 #------------------------------------------------- state masine 시작
 
 #------------------------------------------------- init state
+# 초기 설정 state
 
     if self.state == self.INIT:
       
-      #중앙선 따라가는 pid
+      #중앙선 따라가는 pid 계수들 초기화
       Kp_center = 1
       Kd_center = 3 
 
-      Kpa_center = 3 # 각도비례
-      Kda_center = 3 # 각도비례
+      Kpa_center = 3 
+      Kda_center = 3 
 
       prev_error1_center = 0
       prev_error2_center = 0
@@ -496,7 +525,9 @@ class ChangeDrive:
       error2_center = 0
 
 
-      #조향 pid
+      # 조향(return_1, return_2) pid 계수들 초기화
+      # 둘다 대칭을 이루는 같은 조향을 할 것으로 예상되고 한번에 한 state만 실행될 예정이므로 변수통일함
+
       Kp_angle = 1
       Kd_angle = 3 # 미분
       Ka_angle = 3 # 각도비례
@@ -505,52 +536,96 @@ class ChangeDrive:
       error1_angle = 0
       error2_angle = 0
 
+      # 카메라 정보 받아오기
       self.height, self.width = image.shape[:2]
+      
+      # 각도 변수 지정
       angle = 0
 
-      if (self.height>0) and (self.width>0) and (초음파로 옆차 감지):
-        current_line = self.detect_current_lane(image, self.width, self.height)
 
-        if current_line == 1:
+      # (self.height>0) and (self.width>0) 이란 것은 카메라를 정상적으로 로드할 때를 뜻함
+      # 문제시 수정 가능
+
+      # 현재 차선 정보 받아오기
+      current_line = self.detect_current_lane(image, self.width, self.height)
+      
+
+
+      # 1차선에서 오른쪽 차량 감지 시 sidedrive_1 state로
+      if current_line == 1:
+        if (self.height > 0) and (self.width > 0) and (초음파로 오른쪽 차 감지):
           self.state = self.sidedrive_1
 
-        elif current_line == 2:
+        elif (self.height > 0) and (self.width > 0):
+          self.state = self.line_change
+
+      # 2차선에서 왼쪽 차량 감지 시 sidedrive_2 state로
+      elif current_line == 2:
+        if (self.height > 0) and (self.width > 0) and (초음파로 왼쪽 차 감지):
           self.state = self.sidedrive_2
-        
-        elif current_line == 0:
-          pass
+
+        elif (self.height>0) and (self.width>0):
+          self.state = self.line_change
+
+      elif current_line == 0: # error
+        pass
           
 
-      elif (self.height>0) and (self.width>0):
-        self.state = self.line_change
 
-# -------------------------------------------------- line_change state
 
-    elif self.state == self.line_change:
-      a,b,c = self.find_yellow(image)
+# -------------------------------------------------- yello_follow state
+# 중앙선 추종 state
+
+    elif self.state == self.yello_follow:
+
+      # 노란차선 구하기
+      a,b,c = self.find_yellow(image)  
   
       # PD 제어 구현 ->  선 위치 맞추기, 선 각도 , 라이다나 옆차선 차량 유무 확인
     
 
-
       # 위치 맞추기 pid
       if a == 0:  # 노답 , x축에 평행한 직선임 / 다시 find yellow 부터
+        angle = 0
         pass
 
-      elif a != 0:
+      elif a != 0:  # 일단 가로선은 아니다
+        
+        # 먼저 탈출시킬 상황들이면(노란선을 정확히 추종시) detect 분기로 보낼거
+        # self.threshold_mid는 노란선이 중앙에 들어갔다고 판단할 threshold임
+          # - 예를들어 10이라면 중앙좌표(self.width/2)에서 +-10까지 허용하는 거
 
-        if ((self.width/2-10)<(-(c+b*self.height)/a)<(self.width/2+10)) and ((self.width/2-10)<(-c/a)<(self.width/2+10)):    # 삐뚤어졌지만 범위 내에 들어간 직선
-          self.state = self.detect
+        # 위 프레임과 노란 직선의 교점
+        x_top = -(c/a)
+        
+        # 아래 프레임과 노란 직선의 교점
+        x_bottom = -(c+b*self.height)/a
+        
+        # 카메라 중앙 좌표
+        camera_center = self.width/2
 
+        # 노란선이 들어올 범위를 정할 threshold
+        threshold_mid = 10
 
-        if (b == 0) and ((self.width/2-10)<(-c/a)<(self.width/2+10)): # 수직선이며 중앙범위 내에 들어감
+        # 삐뚤어졌지만 수직선에 가까워 위와 아래 교점이 범위 내에 들어간 직선
+        if ((camera_center-threshold_mid)<x_bottom<(camera_center+threshold_mid)):
+          if((camera_center-threshold_mid)<x_top<(camera_center+threshold_mid)):
+          
+            angle = 0
+            self.state = self.detect
+
+        # 수직선(b == 0, ax+c=0)이며 중앙범위 내에 들어감
+        if (b == 0) and ((camera_center-threshold_mid)<x_top<(camera_center+self.threshold_mid)): 
+          
+          angle = 0
           self.state = self.detect  
 
+
+        # 노란선의 밑변 교점을 320, 노란선의 두 교점의 x좌표 차이를 0으로 하게 pid
 
         current1_center = (-(c+b*self.height)/a) # 밑변에서의 노란 직선의 교점
         target1_center = 320
         error1_center = target1_center - current1_center
-   
         derivative1_center = (error1_center - prev_error1_center) 
 
 
@@ -562,7 +637,7 @@ class ChangeDrive:
 
         # -(a/b) 는 직선의 기울기
 
-          current2_center = - self.height / (a/b)
+          current2_center = - self.height / (a/b) # 직선의 윗프레임 교점과 아랫프레임 교점의 좌표 차이
 
 
         target2_center = 0 # 윗변 교점과 아랫변 교점의 x 좌표 차이
@@ -582,35 +657,47 @@ class ChangeDrive:
 
 
 # -------------------------------------------------- detect state
+# 분기 계산 state
 
     elif self.state == self.detect:
       angle = 0
 
 
-
+      # 차량 두개 감지한 상황
+      # 일단 지금 알고리즘은 두개 중 하나가 완전히 감지되지 않을 때까지 계속 주행하기로함
+      # 따라서 line_change로 state를 돌리며 차량이 사라질 때까지 대기
       if len(self.yolo_list) == 2:
         self.state = self.line_change
           
-    
+
+      # 차량이 한 개 감지된 상황
       elif len(self.yolo_list) == 1:
-        g = self.find_closeObstacle_lane(image)
+
+        # 장애물 차량의 차선 계산
+        obstacle_lane = self.find_closeObstacle_lane(image)
         
-        if g==2:
+
+        if obstacle_lane == 2:        # 장애물이 2차선에 있다면 1차선으로 복귀
           self.state = self.return_1
-        elif g==1:
+
+        elif obstacle_lane == 1:      # 장애물이 1차선에 있다면 2차선으로 복귀
           self.state = self.return_2
-        else:
+
+        else:    # 예외처리
           pass
-      else:
+      else:      # 예외처리
         pass
       
 # -------------------------------------------------- return_1 state
+# 1차선 복귀 state / 검증필요
 
     elif self.state == self.return_1:
 
       y_a, y_b, y_c = self.find_yellow(image)
 
       height, width = image.shape[:2]
+
+
 
       # 오른쪽 절반 영역을 검은색(0)으로 설정
       if len(image.shape) == 3:
@@ -622,15 +709,17 @@ class ChangeDrive:
         image[:, width // 2:] = 0
 
       w_a, w_b, w_c = self.find_white(image)
-      
+      # 왼쪽 흰 차선을 찾는 알고리즘 과정임, 더 나은 방법이 있다면 수정
 
-      #pid 시작
 
+
+      #pid 초안
+
+      # 카메라 중앙 좌표와 두 직선의 교점의 평균 좌표가 같아지게 각도 pid
       target1_angle = 320
       current1_angle = ( (-(w_c + w_b * self.height) / w_a) + (-(y_c + y_b * self.height) / y_a) ) / 2
 
-      target2_angle = 0
-
+      # 양 차선 각도 계산
       if w_b==0:
         m_w=0
       else:
@@ -641,6 +730,8 @@ class ChangeDrive:
       else:
         m_y = -(y_a/y_b)
 
+      # 흰차선의 각도(m_w) 와 노란차선의 각도(m_y) 의 합을 0으로 하게 각도 pid
+      target2_angle = 0
       current2_angle = m_w + m_y
 
       error1_angle = target1_angle - current1_angle
@@ -651,11 +742,14 @@ class ChangeDrive:
       prev_error_angle = error1_angle
 
 # -------------------------------------------------- return_2 state
+# 2차선 복귀 state / 검증필요
 
     elif self.state == self.return_2:
 
       y_a, y_b, y_c = self.find_yellow(image)
       height, width = image.shape[:2]
+
+
 
       # 왼쪽 절반 영역을 검은색(0)으로 설정
       if len(image.shape) == 3:
@@ -667,14 +761,18 @@ class ChangeDrive:
 
 
       w_a, w_b, w_c = self.find_white(image)
+      # 오른쪽 흰 차선을 찾는 알고리즘 과정임, 더 나은 방법이 있다면 수정
 
-      #pid 시작
 
+
+
+      #pid 초안
+
+      # 카메라 중앙 좌표와 두 직선의 교점의 평균 좌표가 같아지게 각도 pid
       target1_angle = 320
       current1_angle = ( (-(w_c + w_b * self.height) / w_a) + (-(y_c + y_b * self.height) / y_a) ) / 2
 
-      target2_angle = 0
-
+      # 양 차선 각도 계산
       if w_b==0:
         m_w=0
       else:
@@ -685,6 +783,8 @@ class ChangeDrive:
       else:
         m_y = -(y_a/y_b)
 
+      # 흰차선의 각도(m_w) 와 노란차선의 각도(m_y) 의 합을 0으로 하게 각도 pid
+      target2_angle = 0
       current2_angle = m_w + m_y
 
       error1_angle = target1_angle - current1_angle
@@ -699,15 +799,15 @@ class ChangeDrive:
     elif self.state == self.sidedrive_1:
 # 차선따라 각도 조향 코드
       if (초음파로 오른쪽차 미 감지):
-        self.state = self.sidedrive_1
+        self.state = self.yello_follow
 
 
 # -------------------------------------------------- sidedrive_2 state
 
-    elif self.state == self.sidedrive_1:
+    elif self.state == self.sidedrive_2:
 # 차선따라 각도 조향 코드
       if (초음파로 왼쪽차 미 감지):
-        self.state = self.sidedrive_2
+        self.state = self.yello_follow
 
 
 
@@ -746,7 +846,7 @@ class ChangeDrive:
 
     return angle,speed
   
-  def Do_Test(self):
+  def Do_Test(self): # 앞차 속도 pid로 잘 추종하는지 test
     image = self._image
     
     _, _, _ =self.find_yellow(image)
@@ -800,7 +900,7 @@ class ChangeDrive:
 
     return angle,speed
 
-  def Do_Test2(self):
+  def Do_Test2(self):  # 중앙 노란선 잘 추종하는지 test2
     
     image = self._image
     speed = 5
@@ -828,11 +928,11 @@ class ChangeDrive:
       angle = 0
 
       if (self.height>0) and (self.width>0):
-        self.state = self.line_change
+        self.state = self.yello_follow
 
 
 
-    elif self.state == self.line_change:
+    elif self.state == self.yello_follow:
 
       
       a,b,c = self.find_yellow(image)
@@ -889,10 +989,12 @@ class ChangeDrive:
         prev_error1_center = error1_center
         prev_error2_center = error1_center
       
-        
+      # 중앙선 출력
       cv2.line(image, (self.x1, self.y1), (self.x2, self.y2), (0, 255, 0), 2)
 
       cv2.imshow("Yellow line", image)
+      
+      # 직선 a,b,c 값 출력
       print(a,b,c)
 
     
