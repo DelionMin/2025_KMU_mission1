@@ -39,7 +39,6 @@ class ChangeDrive:
     self.best_line_right_prev = None
     
     self.state = self.INIT
-    self.state2 = 1
 
     # 현재 차선
     self.lane_constant = 0
@@ -802,74 +801,99 @@ class ChangeDrive:
     return angle,speed
 
   def Do_Test2(self):
-
+    
     image = self._image
+    speed = 5
 
-    speed = 7
+    if self.state == self.INIT:
 
-    Kp_center = 1
-    Kd_center = 3 
+      #중앙선 따라가는 pid
+      Kp_center = 1
+      Kd_center = 3 
 
-    Kpa_center = 3 # 각도비례
-    Kda_center = 3 # 각도비례
+      Kpa_center = 3 # 각도비례
+      Kda_center = 3 # 각도비례
+
+      prev_error1_center = 0
+      prev_error2_center = 0
+
+      derivative1_center = 0
+      derivative2_center = 0
+
+      error1_center = 0
+      error2_center = 0
 
 
-    a,b,c = self.find_yellow(image)
+      self.height, self.width = image.shape[:2]
+      angle = 0
 
-    # PD 제어 구현 ->  선 위치 맞추기, 선 각도 , 라이다나 옆차선 차량 유무 확인
+      if (self.height>0) and (self.width>0):
+        self.state = self.line_change
+
+
+
+    elif self.state == self.line_change:
+
+      
+      a,b,c = self.find_yellow(image)
+
+
+      # PD 제어 구현 ->  선 위치 맞추기, 선 각도 , 라이다나 옆차선 차량 유무 확인
+      
+
+
+      # 위치 맞추기 pid
+      if a == 0:  # 노답 , x축에 평행한 직선임 / 다시 find yellow 부터
+        angle = 0
+        pass
+
+      elif a != 0:
+
+        if ((self.width/2-10)<(-(c+b*self.height)/a)<(self.width/2+10)) and ((self.width/2-10)<(-c/a)<(self.width/2+10)):    # 삐뚤어졌지만 범위 내에 들어간 직선
+          angle = 0
+
+
+        if (b == 0) and ((self.width/2-10)<(-c/a)<(self.width/2+10)): # 수직선이며 중앙범위 내에 들어감
+          angle = 0
+
+
+
+        current1_center = (-(c+b*self.height)/a) # 밑변에서의 노란 직선의 교점
+        target1_center = 320
+        error1_center = target1_center - current1_center
     
-
-
-    # 위치 맞추기 pid
-    if a == 0:  # 노답 , x축에 평행한 직선임 / 다시 find yellow 부터
-      pass
-
-    elif a != 0:
-
-      if ((self.width/2-10)<(-(c+b*self.height)/a)<(self.width/2+10)) and ((self.width/2-10)<(-c/a)<(self.width/2+10)):    # 삐뚤어졌지만 범위 내에 들어간 직선
-        self.state = self.detect
-
-
-      if (b == 0) and ((self.width/2-10)<(-c/a)<(self.width/2+10)): # 수직선이며 중앙범위 내에 들어감
-        self.state = self.detect  
+        derivative1_center = (error1_center - prev_error1_center) 
 
 
 
-      current1_center = (-(c+b*self.height)/a) # 밑변에서의 노란 직선의 교점
-      target1_center = 320
-      error1_center = target1_center - current1_center
-  
-      derivative1_center = (error1_center - prev_error1_center) 
+        if (b == 0): # 범위에 들지 않는 수직선
+          current2_center = 0 # 직선의 윗프레임 교점과 아랫프레임 교점의 좌표 차이
+
+        elif (b != 0):
+
+        # -(a/b) 는 직선의 기울기
+
+          current2_center = - self.height / (a/b)
 
 
+        target2_center = 0 # 윗변 교점과 아랫변 교점의 x 좌표 차이
+        
+        
+        error2_center = target2_center - current2_center
 
-      if (b == 0): # 범위에 들지 않는 수직선
-        current2_center = 0 # 직선의 윗프레임 교점과 아랫프레임 교점의 좌표 차이
+        derivative2_center = (error1_center - prev_error2_center) 
 
-      elif (b != 0):
-
-      # -(a/b) 는 직선의 기울기
-
-        current2_center = - self.height / (a/b)
-
-
-      target2_center = 0 # 윗변 교점과 아랫변 교점의 x 좌표 차이
+        angle = Kp_center * error1_center + Kd_center * derivative1_center + Kpa_center * error2_center + Kda_center * derivative2_center
+        
+        
+        prev_error1_center = error1_center
+        prev_error2_center = error1_center
       
-      
-      error2_center = target2_center - current2_center
+        
+      cv2.line(image, (self.x1, self.y1), (self.x2, self.y2), (0, 255, 0), 2)
 
-      derivative2_center = (error1_center - prev_error2_center) 
-
-      angle = Kp_center * error1_center + Kd_center * derivative1_center + Kpa_center * error2_center + Kda_center * derivative2_center
-      
-      
-      prev_error1_center = error1_center
-      prev_error2_center = error1_center
-    
-      
-    cv2.line(image, (self.x1, self.y1), (self.x2, self.y2), (0, 255, 0), 2)
-
-    cv2.imshow("Yellow line", image)
+      cv2.imshow("Yellow line", image)
+      print(a,b,c)
 
     
     
