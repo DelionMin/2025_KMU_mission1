@@ -29,8 +29,8 @@ class ChangeDrive:     # change lane 클래스
     # 차선 인식 시 사용할 기울기 THRESHOLDS
     # TO BE TUNED
     
-    self.height = 0                 # 화면 높이
-    self.width = 0                  # 화면 너비
+    self.height = 480               # 화면 높이
+    self.width = 640               # 화면 너비
 
     
     self.state = self.INIT           # init state 로 시작
@@ -44,8 +44,8 @@ class ChangeDrive:     # change lane 클래스
     self.x2=0
 
 
-    self.camere_diff = 0.2           # 카메라와 중심 거리 (일단 사용x)
-    self.THRESHOLD_SLOPE = 0.6       # 기울기 threshold (일단 사용x)
+    #self.camere_diff = 0.2           # 카메라와 중심 거리 (일단 사용x)
+    #self.THRESHOLD_SLOPE = 0.6       # 기울기 threshold (일단 사용x)
 
 
     # 클래스 ID 매핑 (detector.pt 모델에 따라 조정 필요)
@@ -86,21 +86,24 @@ class ChangeDrive:     # change lane 클래스
     os.system('v4l2-ctl -d /dev/videoCAM -c auto_exposure=1')
     
     
-  def _get_front_ranges(self):
-    """전방 배열(front_ranges, 길이 40)을 반환."""
-    front_range = self._ranges[self._front_indices]
-    return front_range  # 길이 40
-  
+  '''
+  메소드 이름: get_value
+  입력: image, ranges, ultrasonic
+  출력: X
+  역할: detector에서 값을 받아옴
+  '''
   def get_value(self, image, ranges, ultrasonic): # detecter 에서 센서 값을 받아옴
-    """
-    센서 값 받아오기 위한 메소드
-    """
     self._image = image
     self._ranges = np.array(ranges) if not isinstance(ranges, np.ndarray) else ranges
-
-  def lane_color_detection(self,image, roi_vertices): # 차선 색깔 판별
-    # 입력 : image, 특정 구역을 가리키는 roi
-    # 출력 : white, yellow, unknown 중 해당하는 문자열
+    
+    
+  '''
+  메소드 이름: lane_color_detection
+  입력: image, roi_vertices(특정 구역 가리키는 roi)
+  출력: white, yellow, unknown 중 해당하는 문자열
+  역할: 차선 색깔 판별
+  '''
+  def lane_color_detection(self,image, roi_vertices): 
 
     """
     image: BGR 이미지 (OpenCV 읽은 원본)
@@ -145,12 +148,14 @@ class ChangeDrive:     # change lane 클래스
 
     return color_detected
   
+  
+  '''
+  메소드 이름: detect_current_lane
+  입력: image, width(카메라 너비), height(카메라 높이)
+  출력: 현재 차선에 해당하는 숫자
+  역할: 양 쪽 차선의 색깔을 lane_color_detection 함수를 통해 구한 뒤 차선 정보 반환
+  '''
   def detect_current_lane(self,image,width,height):   # 차량의 현재 차선 반환
-
-    # 양 쪽 차선의 색깔을 lane_color_detection 함수를 통해 구한 뒤 차선 정보 반환
-    # 입력 : image, 카메라 너비, 카메로 높이
-    # 출력 : 현재 차선에 해당하는 숫자
-
 
     # 왼쪽 roi
     roi_left = np.array([[   # 왼쪽 사다리꼴 절반
@@ -183,14 +188,19 @@ class ChangeDrive:     # change lane 클래스
 
     elif (self.left_color == 'yellow') and (self.right_color == 'yellow'): # error
       return 0
-
-
-  def get_best_line(self, lines): # lane drive에서 가져옴
+  
+  
+  '''
+  메소드 이름: get_best_line
+  입력: lines
+  출력: best_line
+  역할: 여러 line 중 best_line 추출
+  '''
+  def get_best_line(self, lines): 
     '''
     입력된 선들 중에서 대푯값 추출
     gets: [[x1, y1, x2, y2], [x1, y1, x2, y2], ...]
     returns: [[x1, y1, x2, y2]]
-
 
     *** 검증 필요 ***
     '''
@@ -227,12 +237,16 @@ class ChangeDrive:     # change lane 클래스
       best_line = [[x1, y1, x2, y2]]
 
     return best_line
-
-  def find_yellow(self,image_yellow): # 노란색 직선 검출 후 직선 상수 반환, 일단 동작 확인함
-
-    # 입력 : image
-    # 출력 : 추출한 노란색 차선의 a, b, c 값 (ax+by+c=0)
-    
+  
+  
+  '''
+  메소드 이름: find_yellow
+  입력: image
+  출력: 추출한 노란색 차선의 a, b, c 값 (ax+by+c=0)
+  역할: 노란색 직선 검출 후 직선 상수 반환
+  '''
+  def find_yellow(self,image_yellow): 
+    #---------------------------------노란 선 검출-----------------------
     # 노란 이미지 생성
     hsv = cv2.cvtColor(image_yellow, cv2.COLOR_BGR2HSV)
     
@@ -260,6 +274,7 @@ class ChangeDrive:     # change lane 클래스
     if yellow_lines is None:   # 차선을 찾지 못하면 0,0,0 반환
       return 0,0,0
     
+    #----------------------------------노란 선 best line 검출----------------
     # 왼쪽, 오른쪽 차선 넣어둘 리스트
     final_yellow_lines = []
 
@@ -270,7 +285,6 @@ class ChangeDrive:     # change lane 클래스
       if x1 == x2 and y1 == y2:    # 두 점이 같은 점을 가리키면 패스
         continue
 
-      
       # ***< 영상처리 시 Y값의 경우 아래로 갈수록 커진다는 점 유의 >***
     
       final_yellow_lines.append(line)  # final 리스트에 추가
@@ -295,12 +309,18 @@ class ChangeDrive:     # change lane 클래스
     b = x2 - x1
     c = x1 * y2 - x2 * y1
 
-    return a, b, c
+    return a, b, c #a, b, c 반환 말고  x1, y1, x2, y2 = best_yellow_line[0] => 이걸 반환하게 하면 어떨까
     
+    
+  '''
+  메소드 이름: find_white
+  입력: image
+  출력: 추출한 흰색 차선의 a, b, c 값 (ax+by+c=0)
+  역할: 흰색 직선 검출 후 직선 상수 반환, 일단 동작 확인함
+  ''' 
   def find_white(self,image_white): # 흰색 직선 검출 후 직선 상수 반환, 일단 동작 확인함
-    # 입력 : image
-    # 출력 : 추출한 흰색 차선의 a, b, c 값 (ax+by+c=0)
     
+    #---------------------------------노란 선 검출-----------------------
     # 하얀 이미지 생성
     hsv = cv2.cvtColor(image_white, cv2.COLOR_BGR2HSV)
     
@@ -328,6 +348,7 @@ class ChangeDrive:     # change lane 클래스
     if white_lines is None:   # 차선을 찾지 못하면 0,0,0 반환
       return 0,0,0
 
+    #----------------------------------노란 선 best line 검출----------------
     # 왼쪽, 오른쪽 차선 넣어둘 리스트
     final_white_lines = []
 
@@ -357,13 +378,18 @@ class ChangeDrive:     # change lane 클래스
     b = x2 - x1
     c = x1 * y2 - x2 * y1
 
-    return a, b, c
+    return a, b, c #a, b, c 반환 말고  x1, y1, x2, y2 = best_yellow_line[0] => 이걸 반환하게 하면 어떨까
+    
 
+
+  '''
+  메소드 이름: detect_car
+  입력: 
+  출력: 바운딩 박스 중심점, 넓이, 높이를 리스트 형태로 반환
+  역할: YOLO 모델로 상대차량 감지, 상대 차량 관련 정보
+  ''' 
   def _detect_car(self):
-    """
-    YOLO 모델로 상대차량 감지,
-    바운딩 박스 중심점, 넓이, 높이 리스트만 반환
-    """
+  
     if self._image is None:
         return []
 
@@ -410,29 +436,31 @@ class ChangeDrive:     # change lane 클래스
     }
   ]
     '''
+  
     
   def _result_car(self):
-    """
-    YOLO 모델로 상대차량 감지,
-    바운딩 박스 중심점, 넓이, 높이 리스트만 반환
-    """
+   
     if self._image is None:
         return []
 
     try:
       results = model(self._image, verbose=False)
 
-
       return results
 
     except Exception as e:
       print(f"Error in _detect_car: {e}")
       return []
+    #=>삭제
+    
 
-  def find_closeObstacle_lane(self, image): # 장애물 차량의 차선 정보를 판별 / 검증 필요
-    # yolo의 좌표와 장애물의 좌표를 비교해 차선정보 추출
-    # 입력 : image
-    # 출력 : 장애물이 위치한 차선 숫자
+  '''
+  메소드 이름: find_closeObstacle_lane
+  입력: image
+  출력: 장애물이 위치한 차선 숫자
+  역할: 장애물 차량의 차선 정보를 판별
+  ''' 
+  def find_closeObstacle_lane(self, image): 
 
     '''    {
         'center': [190.65, 270.45],
@@ -474,13 +502,25 @@ class ChangeDrive:     # change lane 클래스
       elif(yellow_x == yolo_x): #재판별 요망
         return 0
 
+
+  '''
+  메소드 이름: _get_valid_distance
+  입력: ranges_subset(라이다 ranges)
+  출력: 라이다 거리 최솟값
+  역할: 유효한 라이다 거리 값들에서 최소값 계산
+  ''' 
   def _get_valid_distance(self, ranges_subset):
-    """
-    유효한 거리 값들에서 최소값 계산
-    """
+ 
     valid_ranges = ranges_subset[ranges_subset > self.MIN_VALID_DISTANCE]
     return valid_ranges.min() if valid_ranges.size > 0 else np.inf
 
+
+  '''
+  메소드 이름: chagne_lane
+  입력: 
+  출력: speed, angle
+  역할: speed, angle 계산
+  ''' 
   def change_lane(self):
 
     image = self._image
@@ -488,7 +528,8 @@ class ChangeDrive:     # change lane 클래스
     results = self._result_car()
 
 #-------------------------------------- 속도 pid 제어 / 해당 코드는 어떤 state던지 계속 돌아감
-    
+#extra 차량과 일정 거리 유지하게 해주는 알고리즘
+
     #속도 = 가까운 차 추종
     center = self._ranges[self._front_indices]
     dist_min = self._get_valid_distance(center)
@@ -501,9 +542,9 @@ class ChangeDrive:     # change lane 클래스
     self.prev_error = self.error
 
   
-#------------------------------------------------- state masine 시작
+#=================================== state masine 시작 =========================
 
-#------------------------------------------------- init state
+#---------------------------------- init state-------------
 # 초기 설정 state
 
     if self.state == self.INIT:
@@ -573,7 +614,7 @@ class ChangeDrive:     # change lane 클래스
 
 
 
-# -------------------------------------------------- yello_follow state
+# --------------------------------- yello_follow state------------------
 # 중앙선 추종 state
 
     elif self.state == self.yello_follow:
@@ -656,7 +697,7 @@ class ChangeDrive:     # change lane 클래스
 
 
 
-# -------------------------------------------------- detect state
+# ----------------------------------- detect state--------------------
 # 분기 계산 state
 
     elif self.state == self.detect:
@@ -688,7 +729,7 @@ class ChangeDrive:     # change lane 클래스
       else:      # 예외처리
         pass
       
-# -------------------------------------------------- return_1 state
+# --------------------------------- return_1 state------------------
 # 1차선 복귀 state / 검증필요
 
     elif self.state == self.return_1:
@@ -741,7 +782,7 @@ class ChangeDrive:     # change lane 클래스
       angle = Kp_angle * error1_angle + Kd_angle * derivative_angle - Ka_angle * error2_angle
       prev_error_angle = error1_angle
 
-# -------------------------------------------------- return_2 state
+# ------------------------------ return_2 state-----------------------
 # 2차선 복귀 state / 검증필요
 
     elif self.state == self.return_2:
@@ -910,7 +951,6 @@ class ChangeDrive:     # change lane 클래스
       #중앙선 따라가는 pid
       Kp_center = 1
       Kd_center = 3 
-
       Kpa_center = 3 # 각도비례
       Kda_center = 3 # 각도비례
 
@@ -1001,6 +1041,9 @@ class ChangeDrive:     # change lane 클래스
     
     return angle, speed
 
+
+
+#extra 차량 2개일때 분기 나누는 부분 생각해보자
   def step(self):
     
     angle, speed = self.Do_Test2()
