@@ -305,14 +305,6 @@ class ChangeDrive:     # change lane 클래스
 
     return x1, y1, x2, y2
 
-    # 좌표로부터 a,b,c 값 추출
-    # ax + by + c = 0
-    a_coef = y1 - y2
-    b_coef = x2 - x1
-    c_coef = x1 * y2 - x2 * y1
-
-    return a_coef, b_coef, c_coef 
-    #a, b, c 반환 말고  x1, y1, x2, y2 = best_yellow_line[0] => 이걸 반환하게 하면 어떨까
     
     
   '''
