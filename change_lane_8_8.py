@@ -38,10 +38,16 @@ class ChangeDrive:     # change lane 클래스
     self.lane_constant = 0           # 현재 차선
 
     # 노란 선 좌표 버퍼
-    self.y1=0
-    self.y2=0
-    self.x1=0
-    self.x2=0
+    self.y_y1=0
+    self.y_y2=0
+    self.y_x1=0
+    self.y_x2=0
+
+    # 흰 선 좌표 버퍼
+    self.w_x1=0
+    self.w_x2=0
+    self.w_y1=0
+    self.w_y2=0
 
 
     #self.camere_diff = 0.2           # 카메라와 중심 거리 (일단 사용x)
@@ -238,13 +244,12 @@ class ChangeDrive:     # change lane 클래스
 
     return best_line
   
-  
   '''
   메소드 이름: find_yellow
   입력: image
-  출력: 추출한 노란색 차선의 a, b, c 값 (ax+by+c=0)
-  역할: 노란색 직선 검출 후 직선 상수 반환
-  '''
+  출력: 추출한 노란색 차선의 x1,y1,x2,y2 값
+  역할: 노란색 직선 검출 후 직선 좌표 반환, 일단 동작 확인함
+  '''   
   def find_yellow(self,image_yellow): 
     #---------------------------------노란 선 검출-----------------------
     # 노란 이미지 생성
@@ -298,10 +303,10 @@ class ChangeDrive:     # change lane 클래스
 
     # 좌표들을 버퍼에 저장
 
-    self.x1=x1
-    self.x2=x2
-    self.y1=y1
-    self.y2=y2
+    self.y_x1=x1
+    self.y_x2=x2
+    self.y_y1=y1
+    self.y_y2=y2
 
     return x1, y1, x2, y2
 
@@ -311,7 +316,7 @@ class ChangeDrive:     # change lane 클래스
   메소드 이름: find_white
   입력: image
   출력: 추출한 흰색 차선의 x1,y1,x2,y2 값
-  역할: 흰색 직선 검출 후 직선 상수 반환, 일단 동작 확인함
+  역할: 흰색 직선 검출 후 직선 좌표 반환, 일단 동작 확인함
   ''' 
   def find_white(self,image_white): # 흰색 직선 검출 후 직선 상수 반환, 일단 동작 확인함
     
@@ -365,6 +370,12 @@ class ChangeDrive:     # change lane 클래스
     best_white_line = self.get_best_line(final_white_lines)    # 가장 바람직한 차선 추출
 
     x1, y1, x2, y2 = best_white_line[0]                        # 추출한 차선의 좌표 지정
+
+    self.w_x1=x1
+    self.w_x2=x2
+    self.w_y1=y1
+    self.w_y2=y2
+
 
     return x1, y1, x2, y2
 
@@ -889,8 +900,8 @@ class ChangeDrive:     # change lane 클래스
       
 
     # 노란 차선 표시
-    x1, y1, x2, y2 = self.x1, self.y1, self.x2, self.y2
-    cv2.line(image_with_boxes, (x1, y1), (x2, y2), (0, 255, 0), 2)
+
+    cv2.line(image_with_boxes, (self.y_x1, self.y_y1), (self.y_x2, self.y_y2), (0, 255, 0), 2)
 
     # 이미지 표시 (필요시)
     cv2.imshow("YOLO Result", image_with_boxes)
@@ -947,7 +958,7 @@ class ChangeDrive:     # change lane 클래스
       cv2.putText(image, text, (x1, y1 - 10),
                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
       
-    cv2.line(image, (self.x1, self.y1), (self.x2, self.y2), (0, 255, 0), 2)
+    cv2.line(image, (self.y_x1, self.y_y1), (self.y_x2, self.y_y2), (0, 255, 0), 2)
 
     cv2.imshow("YOLO Result", image)
 
@@ -1043,7 +1054,7 @@ class ChangeDrive:     # change lane 클래스
         prev_error2_center = error1_center
       
       # 중앙선 출력
-      cv2.line(image, (self.x1, self.y1), (self.x2, self.y2), (0, 255, 0), 2)
+      cv2.line(image, (self.y_x1, self.y_y1), (self.y_x2, self.y_y2), (0, 255, 0), 2)
 
       cv2.imshow("Yellow line", image)
       
