@@ -303,19 +303,22 @@ class ChangeDrive:     # change lane 클래스
     self.y1=y1
     self.y2=y2
 
+    return x1, y1, x2, y2
+
     # 좌표로부터 a,b,c 값 추출
     # ax + by + c = 0
-    a = y1 - y2
-    b = x2 - x1
-    c = x1 * y2 - x2 * y1
+    a_coef = y1 - y2
+    b_coef = x2 - x1
+    c_coef = x1 * y2 - x2 * y1
 
-    return a, b, c #a, b, c 반환 말고  x1, y1, x2, y2 = best_yellow_line[0] => 이걸 반환하게 하면 어떨까
+    return a_coef, b_coef, c_coef 
+    #a, b, c 반환 말고  x1, y1, x2, y2 = best_yellow_line[0] => 이걸 반환하게 하면 어떨까
     
     
   '''
   메소드 이름: find_white
   입력: image
-  출력: 추출한 흰색 차선의 a, b, c 값 (ax+by+c=0)
+  출력: 추출한 흰색 차선의 x1,y1,x2,y2 값
   역할: 흰색 직선 검출 후 직선 상수 반환, 일단 동작 확인함
   ''' 
   def find_white(self,image_white): # 흰색 직선 검출 후 직선 상수 반환, 일단 동작 확인함
@@ -371,16 +374,25 @@ class ChangeDrive:     # change lane 클래스
 
     x1, y1, x2, y2 = best_white_line[0]                        # 추출한 차선의 좌표 지정
 
+    return x1, y1, x2, y2
+
+
+  '''
+  메소드 이름: calculate_abc
+  입력: x1,y1,x2,y2
+  출력: 입력받은 x1,y1,x2,y2 값에 해당하는 a, b, c 값 반환 (ax+by+c=0)
+  역할: 직선의 두 점 좌표를 받아서 a,b,c 값으로 변환 (ax+by+c=0)
+  ''' 
+
+  def calculate_abc(self, x1, y1, x2, y2):
 
     # 좌표로부터 a,b,c 값 추출
     # ax + by + c = 0
-    a = y1 - y2
-    b = x2 - x1
-    c = x1 * y2 - x2 * y1
+    a_coef = y1 - y2
+    b_coef = x2 - x1
+    c_coef = x1 * y2 - x2 * y1
 
-    return a, b, c #a, b, c 반환 말고  x1, y1, x2, y2 = best_yellow_line[0] => 이걸 반환하게 하면 어떨까
-    
-
+    return a_coef, b_coef, c_coef 
 
   '''
   메소드 이름: detect_car
@@ -477,8 +489,9 @@ class ChangeDrive:     # change lane 클래스
     yolo_width = yolo['width']      # yolo로 인식한 차량의 너비 추출
     yolo_height = yolo['height']    # yolo로 인식한 차량의 높이 추출
 
-    a,b,c = self.find_yellow(image) # 노란 직선 계산
-    
+    x1, y1, x2, y2 = self.find_yellow(image) # 노란 직선 계산
+    a, b, c = self.calculate_abc(x1, y1, x2, y2)
+
     if a==0 and b==0 and c==0:      # 직선을 찾지 못하면 0 반환
       return 0
   
@@ -620,7 +633,8 @@ class ChangeDrive:     # change lane 클래스
     elif self.state == self.yello_follow:
 
       # 노란차선 구하기
-      a,b,c = self.find_yellow(image)  
+      x1, y1, x2, y2 = self.find_yellow(image) # 노란 직선 계산
+      a, b, c = self.calculate_abc(x1, y1, x2, y2)
   
       # PD 제어 구현 ->  선 위치 맞추기, 선 각도 , 라이다나 옆차선 차량 유무 확인
     
@@ -734,7 +748,8 @@ class ChangeDrive:     # change lane 클래스
 
     elif self.state == self.return_1:
 
-      y_a, y_b, y_c = self.find_yellow(image)
+      x1, y1, x2, y2 = self.find_yellow(image) # 노란 직선 계산
+      y_a, y_b, y_c = self.calculate_abc(x1, y1, x2, y2)
 
       height, width = image.shape[:2]
 
@@ -749,7 +764,9 @@ class ChangeDrive:     # change lane 클래스
         # 흑백 이미지
         image[:, width // 2:] = 0
 
-      w_a, w_b, w_c = self.find_white(image)
+      w_x1, w_y1, w_x2, w_y2 = self.find_white(image)
+      w_a, w_b, w_c = self.calculate_abc(w_x1, w_y1, w_x2, w_y2)
+
       # 왼쪽 흰 차선을 찾는 알고리즘 과정임, 더 나은 방법이 있다면 수정
 
 
@@ -787,7 +804,9 @@ class ChangeDrive:     # change lane 클래스
 
     elif self.state == self.return_2:
 
-      y_a, y_b, y_c = self.find_yellow(image)
+      x1, y1, x2, y2 = self.find_yellow(image) # 노란 직선 계산
+      y_a, y_b, y_c = self.calculate_abc(x1, y1, x2, y2)
+
       height, width = image.shape[:2]
 
 
@@ -801,7 +820,8 @@ class ChangeDrive:     # change lane 클래스
         image[:, :width // 2] = 0
 
 
-      w_a, w_b, w_c = self.find_white(image)
+      w_x1, w_y1, w_x2, w_y2 = self.find_white(image)
+      w_a, w_b, w_c = self.calculate_abc(w_x1, w_y1, w_x2, w_y2)
       # 오른쪽 흰 차선을 찾는 알고리즘 과정임, 더 나은 방법이 있다면 수정
 
 
@@ -890,7 +910,8 @@ class ChangeDrive:     # change lane 클래스
   def Do_Test(self): # 앞차 속도 pid로 잘 추종하는지 test
     image = self._image
     
-    _, _, _ =self.find_yellow(image)
+    _,_,_,_ = self.find_yellow(image) # 노란 직선 생성(버퍼이용)
+    
     
     angle = 0
 
@@ -975,8 +996,8 @@ class ChangeDrive:     # change lane 클래스
     elif self.state == self.yello_follow:
 
       
-      a,b,c = self.find_yellow(image)
-
+      x1,y1,x2,y2 = self.find_yellow(image)
+      a,b,c = self.calculate_abc(x1,y1,x2,y2)
 
       # PD 제어 구현 ->  선 위치 맞추기, 선 각도 , 라이다나 옆차선 차량 유무 확인
       
