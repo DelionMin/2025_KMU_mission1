@@ -101,7 +101,7 @@ class ChangeDrive:     # change lane 클래스
   def get_value(self, image, ranges, ultrasonic): # detecter 에서 센서 값을 받아옴
     self._image = image
     self._ranges = np.array(ranges) if not isinstance(ranges, np.ndarray) else ranges
-    
+    self._ultrasonic = ultrasonic
     
   '''
   메소드 이름: lane_color_detection
@@ -1065,6 +1065,14 @@ class ChangeDrive:     # change lane 클래스
     
     return angle, speed
 
+# 초음파센서 test 코드
+  def Do_Test3(self): # 검증필요
+
+    ultrasonic = self._ultrasonic
+    sensor_distance=ultrasonic[0]
+    print(sensor_distance)
+    
+    return
 
 
 #extra 차량 2개일때 분기 나누는 부분 생각해보자
