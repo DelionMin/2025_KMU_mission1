@@ -1069,9 +1069,10 @@ class ChangeDrive:     # change lane 클래스
   def Do_Test3(self): # 검증필요
 
     ultrasonic = self._ultrasonic
-    sensor_distance=ultrasonic[0]
-    print(sensor_distance)
-    
+
+    print("0번:",ultrasonic[0])
+    print("1번:",ultrasonic[1])
+    print("2번:",ultrasonic[2])
     return
 
 
