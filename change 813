@@ -19,27 +19,7 @@ model = YOLO("/home/xytron/xycar_ws/src/xycar_drive/xycar_drive/detector.pt")
 class ChangeDrive:
 
     def __init__(self) -> None:
-      
-      self.prev_error1_center = 0
-      self.prev_error2_center = 0
-      self.Kp_center = 3
-      self.Kpa_center = 3
-      self.Kd_center = 3
-      self.Kda_center = 3
-
-
-      # <20250812> 차선 좌표 버퍼 추가
-      self.y_x1=0
-      self.y_x2=0
-      self.y_y1=0
-      self.y_y2=0
-
-      self.w_x1=0
-      self.w_x2=0
-      self.w_y1=0
-      self.w_y2=0
-
-
+    
       # State Machine 상수
       self.INIT = 0
       self.DETECT_ONE_EXTRA_CAR = 1
@@ -91,8 +71,7 @@ class ChangeDrive:
       self.SUPER_THRESHOLD = 50 # 초음파 센서 임계값
 
       # 카메라 노출값 조정
-      self.EXPOSURE = 5
-
+      os.system('v4l2-ctl -d /dev/videoCAM -c auto_exposure=1')
       
       # lane_change 분기 설정
       self.dist_min = 0
@@ -108,8 +87,6 @@ class ChangeDrive:
     # 센서 데이터 및 유틸리티 메서드
     # --------------------------------------------------
     def get_value(self, image, ranges, ultrasonic):
-        os.system('v4l2-ctl -d /dev/videoCAM -c auto_exposure=0')
-        os.system(f'v4l2-ctl -d /dev/videoCAM -c exposure_time_absolute={self.EXPOSURE}')
         self._image = image
         self._ranges = np.array(ranges) if not isinstance(ranges, np.ndarray) else ranges
         self._ultrasonic = ultrasonic
@@ -217,6 +194,93 @@ class ChangeDrive:
 
       return masked_image
         
+    def line_slope(self, line):
+      """
+      Calculate slope of a line in format [[x1, y1, x2, y2]].
+      Returns float('inf') if the line is vertical.
+      """
+      x1, y1, x2, y2 = line[0]
+      
+      if x2 - x1 == 0: # Vertical line
+          return float('inf')
+      
+      return (y2 - y1) / (x2 - x1)
+          
+    # 이름 바꾸기 => 
+    def detect_yellow_line(self):
+        """
+        이름 바꾸자 -> detect_yellow_line
+        gets: 이미지
+        returns: lines_yellow -> 영상처리 후 허프 변환해서 얻은 선분들의 list
+
+        e.g. 
+        lines_yellow = self.detect_yellow_line()
+
+        if lines_yellow is not None:
+            current_lane = detect_current_lane(lines_yellow)
+        """
+        image = self._image
+
+        # FYI) frame.shape => [(Height), (Width), (channel -> e.g. BGR)]
+        height, width = image.shape[:2]
+
+        # RoI(Region of Interest)의 좌표를 나타내는 np.array
+        roi_vertices = np.array([[
+            (width * 0, height),
+            (width * 0.3, height * 0.6),
+            (width * 0.7, height * 0.6),
+            (width * 1, height)
+        ]], dtype=np.int32)
+
+        # 이미지 hsv 형태로 변환
+        hsv_yellow = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+
+        # 노란색 범위 상, 하한선
+        lower_yellow = np.array([20, 100, 60])
+        upper_yellow = np.array([40, 255, 255])
+
+        mask_yellow = cv2.inRange(hsv_yellow, lower_yellow, upper_yellow)
+        yellow_parts = cv2.bitwise_and(image, image, mask=mask_yellow)
+
+        gray_yellow = cv2.cvtColor(yellow_parts, cv2.COLOR_BGR2GRAY)
+        blur_yellow = cv2.GaussianBlur(gray_yellow, (5, 5), 0)
+        edges_yellow = cv2.Canny(blur_yellow, 50, 150)
+
+        roi_yellow_edges = self.region_of_interest(edges_yellow, roi_vertices)
+
+        lines_yellow = cv2.HoughLinesP(roi_yellow_edges, rho=1, theta=np.pi/180, threshold=50,
+                            minLineLength=35, maxLineGap=5) 
+        
+        return lines_yellow
+    
+
+    def detect_current_lane(self) -> int:
+
+        lines_yellow = self.detect_yellow_line
+
+        if lines_yellow is not None:
+            # 노란 선분 정제
+            left_lines_yellow, right_lines_yellow = self.filter_lines(lines_yellow, self.THRESHOLD_SLOPE_YELLOW, is_white = False)
+                
+            # <20250801> 인식된 노란 차선들 중 최고의 선 추출
+            lines_yellow_best = self.get_best_line(left_lines_yellow + right_lines_yellow)
+
+            # <20250801> 노란 차선 반영
+            if lines_yellow_best is not None:
+                    slope_yellow = self.line_slope(lines_yellow_best)
+
+                     # 노란색 차선의 기울기를 계산
+                    if ((slope_yellow) > 0):
+                        self.current_lane = 1
+                        return 1
+                    else:
+                        self.current_lane = 2
+                        return 2
+
+        else:
+            return self.current_lane
+           
+   
     '''
     메소드 이름: get_best_line
     입력: lines
@@ -253,7 +317,7 @@ class ChangeDrive:
         
         if m_left != 0.0:
             y1 = 0
-            y2 = self.height_frame
+            y2 = self.height 
             '''
             y1, y2 실제 주행 환경에서는 값 맞춰서 바꾸기
             '''
@@ -264,99 +328,6 @@ class ChangeDrive:
             best_line = [[x1, y1, x2, y2]]
 
         return best_line
-    
-    def line_slope(self, line):
-      """
-      Calculate slope of a line in format [[x1, y1, x2, y2]].
-      Returns float('inf') if the line is vertical.
-      """
-      x1, y1, x2, y2 = line[0]
-      
-      if x2 - x1 == 0: # Vertical line
-          return float('inf')
-      
-      return (y2 - y1) / (x2 - x1)
-          
-    # 이름 바꾸기 => 
-    def detect_yellow_line(self):
-        """
-        이름 바꾸자 -> detect_yellow_line
-        gets: 이미지
-        returns: lines_yellow -> 영상처리 후 허프 변환해서 얻은 선분들의 list
-
-        e.g. 
-        lines_yellow = self.detect_yellow_line()
-
-        if lines_yellow is not None:
-            current_lane = detect_current_lane(lines_yellow)
-        """
-        image = self._image
-
-
-        # RoI(Region of Interest)의 좌표를 나타내는 np.array
-        roi_vertices = np.array([[
-            (self.width_frame * 0, self.height_framet),
-            (self.width_frame * 0.3, self.height_frame * 0.6),
-            (self.width_frame * 0.7, self.height_frame * 0.6),
-            (self.width_frame * 1, self.height_frame)
-        ]], dtype=np.int32)
-
-        # 이미지 hsv 형태로 변환
-        hsv_yellow = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
-
-        # 노란색 범위 상, 하한선
-        lower_yellow = np.array([20, 100, 60])
-        upper_yellow = np.array([40, 255, 255])
-
-        mask_yellow = cv2.inRange(hsv_yellow, lower_yellow, upper_yellow)
-        yellow_parts = cv2.bitwise_and(image, image, mask=mask_yellow)
-
-        gray_yellow = cv2.cvtColor(yellow_parts, cv2.COLOR_BGR2GRAY)
-        blur_yellow = cv2.GaussianBlur(gray_yellow, (5, 5), 0)
-        edges_yellow = cv2.Canny(blur_yellow, 50, 150)
-
-        roi_yellow_edges = self.region_of_interest(edges_yellow, roi_vertices)
-
-        lines_yellow = cv2.HoughLinesP(roi_yellow_edges, rho=1, theta=np.pi/180, threshold=50,
-                            minLineLength=35, maxLineGap=5) 
-        
-        return lines_yellow
-    
-
-    def detect_current_lane(self) -> int:
-
-        # <20250812> undoundlacalerror 해결을 위해 선언 추가
-        slope_yellow = 0
-
-        lines_yellow = self.detect_yellow_line
-
-        if lines_yellow is not None:
-            # 노란 선분 정제
-            left_lines_yellow, right_lines_yellow = self.filter_lines(lines_yellow, self.THRESHOLD_SLOPE_YELLOW, is_white = False)
-                
-            # <20250801> 인식된 노란 차선들 중 최고의 선 추출
-            lines_yellow_best = self.get_best_line(left_lines_yellow + right_lines_yellow)
-
-            # <20250801> 노란 차선 반영
-            if lines_yellow_best is not None:
-                    slope_yellow = self.line_slope(lines_yellow_best)
-
-                     # 노란색 차선의 기울기를 계산
-                    if ((slope_yellow) > 0):
-                        self.current_lane = 1
-                        return 1
-                    else:
-                        self.current_lane = 2
-                        return 2
-            # <20250812> 예외처리
-            elif lines_yellow_best is None:
-               return self.current_lane
-
-        else:
-            return self.current_lane
-           
-   
-
 
     '''
     메소드 이름: calculate_abc
@@ -387,8 +358,8 @@ class ChangeDrive:
         hsv = cv2.cvtColor(image_yellow, cv2.COLOR_BGR2HSV)
         
         # 노란색 범위 정의 (Hue: 20~30, Saturation: 100~255, Value: 100~255)
-        lower_yellow = np.array([20, 100, 60])
-        upper_yellow = np.array([40, 255, 255])
+        lower_yellow = np.array([20, 100, 100])
+        upper_yellow = np.array([30, 255, 255])
         
         # 노란색 마스크 생성
         yellow_mask = cv2.inRange(hsv, lower_yellow, upper_yellow)
@@ -425,25 +396,19 @@ class ChangeDrive:
         
             final_yellow_lines.append(line) # final 리스트에 추가
 
-        if final_yellow_lines is None: # final 리스트가 비었다면 0,0,0 반환
+        if not final_yellow_lines: # final 리스트가 비었다면 0,0,0 반환
             return 0,0,0,0
 
-        else: #<0812> nonetype 에러처리
-        
-            best_yellow_line = self.get_best_line(final_yellow_lines) # 가장 바람직한 차선 추출
+        best_yellow_line = self.get_best_line(final_yellow_lines) # 가장 바람직한 차선 추출
 
-            if final_yellow_lines is None:#<0812> nonetype 에러처리
-                return 0,0,0,0
-            
-            else:
-                x1, y1, x2, y2 = best_yellow_line[0] # 추출한 차선의 좌표 지정
+        x1, y1, x2, y2 = best_yellow_line[0] # 추출한 차선의 좌표 지정
 
             # 좌표들을 버퍼에 저장
 
-                self.y_x1=x1
-                self.y_x2=x2
-                self.y_y1=y1
-                self.y_y2=y2
+        self.y_x1=x1
+        self.y_x2=x2
+        self.y_y1=y1
+        self.y_y2=y2
 
         return x1, y1, x2, y2
 
@@ -672,6 +637,7 @@ class ChangeDrive:
 
         angle = lane_pid['Kp'] * error_pos + lane_pid['Kd'] * derivative_pos - lane_pid['Ka'] * error_angle
         lane_pid['prev_error'] = error_pos
+       
         
         return angle, None
 
@@ -701,11 +667,10 @@ class ChangeDrive:
         
         if self.y_x1 != 0 or self.y_x2 != 0:
             cv2.line(image_with_boxes, (self.y_x1, self.y_y1), (self.y_x2, self.y_y2), (0, 255, 0), 2)
-        # if self.w_x1 != 0 or self.w_x2 != 0:
-        #     cv2.line(image_with_boxes, (self.w_x1, self.w_y1), (self.w_x2, self.w_y2), (0, 255, 0), 2)
+        if self.w_x1 != 0 or self.w_x2 != 0:
+            cv2.line(image_with_boxes, (self.w_x1, self.w_y1), (self.w_x2, self.w_y2), (0, 255, 0), 2)
         
         cv2.imshow("YOLO Result", image_with_boxes)
-        
 
     # --------------------------------------------------
     # 메인 실행 메서드
@@ -719,6 +684,7 @@ class ChangeDrive:
         current_state = self.state
         #-------------------------------INIT state-----------------------
         if self.state == self.INIT:
+          
           #전방 레이더 값 받아오기
           center = self._ranges[self._front_indices]
           dist_min = self._get_valid_distance(center)
@@ -815,33 +781,17 @@ class ChangeDrive:
 
     def step(self):
 
-        # follow_lane 상태에서만 디텍터를 통해 차선 변경 flag 설정
-        # if not self.flag_change_on:
-        #     self.flag_change_on = self._detect_lane_change()
-        #     self._debug_visualization(self._image, self.results)
-        #     print(f"current lane: {self.detect_current_lane()}")
-        #     print(f"state : {self.state}")
-        '''
-        if self.flag_change_on:
-            angle, speed = self.change_lane()    
-        else:
-            angle, speed = self.follow_lane()
-        '''
-        
-        
-        print('p')
+      # follow_lane 상태에서만 디텍터를 통해 차선 변경 flag 설정
+      if not self.flag_change_on:
+          self.flag_change_on = self._detect_lane_change()
+          self._debug_visualization(self._image, self.results)
+          print(f"current lane: {self.detect_current_lane()}")
+          print(f"state : {self.state}")
+      '''
+      if self.flag_change_on:
+          angle, speed = self.change_lane()    
+      else:
+          angle, speed = self.follow_lane()
+    '''
 
-
-        image_sample = self._image
-        x1,y1,x2,y2 = self.find_yellow(image_sample)
-        
-        self.yolo_list = self._detect_car()
-        self.results = self._get_yolo_results()
-        angle = self._handle_yellow_follow_state()
-        speed = 0
-        self._debug_visualization(image_sample, self.results)
-
-        print(x1,x2,y1,y2)
-        
-        
-        return angle, speed
+      return 0,0 #angle, speed
