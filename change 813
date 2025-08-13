@@ -1,0 +1,847 @@
+import time
+import sys
+import os
+import signal
+import numpy as np
+import cv2
+from math import inf, sin, atan, cos
+from ultralytics import YOLO
+
+# 이 코드(class)는 step함수에서 다음과 같이 동작한다.
+# 1. 이미지(카메라 데이터)와 class 내의 state를 기반으로 차선의 위치를 알아낸다.
+#    1.1. 이미지를 항공뷰로 변환한다.
+# 2. 차선의 위치를 기반으로 position을 구한다.
+# 3. p제어를 하여 앞바퀴의 각도를 반환한다. 속도는 임의로 설정한다.
+
+# <YOLO 모델 학습 후 추가>
+model = YOLO("/home/xytron/xycar_ws/src/xycar_drive/xycar_drive/detector.pt")
+
+class ChangeDrive:
+
+    def __init__(self) -> None:
+      
+      self.prev_error1_center = 0
+      self.prev_error2_center = 0
+      self.Kp_center = 3
+      self.Kpa_center = 3
+      self.Kd_center = 3
+      self.Kda_center = 3
+
+
+      # <20250812> 차선 좌표 버퍼 추가
+      self.y_x1=0
+      self.y_x2=0
+      self.y_y1=0
+      self.y_y2=0
+
+      self.w_x1=0
+      self.w_x2=0
+      self.w_y1=0
+      self.w_y2=0
+
+
+      # State Machine 상수
+      self.INIT = 0
+      self.DETECT_ONE_EXTRA_CAR = 1
+      self.DETECT_TWO_EXTRA_CAR = 2
+      self.state = self.INIT
+    
+      # 카메라 및 이미지 관련 설정
+      self.height_frame = 480
+      self.width_frame = 640
+
+      # PID 제어 변수 그룹화
+      self.lane_following_pid = {'Kp': 1, 'Kd': 3, 'Kpa': 3, 'Kda': 3, 'prev_error1': 0, 'prev_error2': 0}
+      self.lane_changing_pid = {'Kp': 1, 'Kd': 3, 'Ka': 3, 'prev_error': 0}
+      self.car_following_pid = {'min_Kp': 0.25, 'min_Kd': 0.75, 'prev_error': 0, 'scaling_factor': 120}
+
+      #차선 관련 변수
+      self.current_lane = 1
+      
+      # 매직 넘버를 상수로 정의
+      self.MIN_PIXEL_COUNT = 200 # 차선 감지 최소 픽셀 수
+      self.STABILIZATION_POSITION_THRESHOLD = 10
+      self.STABILIZATION_ANGLE_THRESHOLD = 5
+      self.THRESHOLD_SLOPE_YELLOW = 0.15
+
+      # HSV 색상 범위 상수화
+      self.HSV_YELLOW_LOWER = np.array([20, 100, 100])
+      self.HSV_YELLOW_UPPER = np.array([30, 255, 255])
+      self.HSV_WHITE_LOWER = np.array([0, 0, 200])
+      self.HSV_WHITE_UPPER = np.array([180, 30, 255])
+
+      # YOLO 객체 감지 관련 설정
+      self.class_names = {'signal_red': 0, 'signal_yellow': 1, 'signal_green': 2, 'rubbercone': 3, 'car': 4}
+      self.confidence_threshold = 0.6
+      self.yolo_list = []
+      self.results = []
+
+      # 라이다(LIDAR) 관련 설정
+      self.TARGET_DISTANCE = 10 # 목표 차량 간 거리
+      self.EXTRA_CAR_DIST_THRESHOLD = 20 #상대 속도 추종 THRESHOLD (self.TARGET_DISTANCE 보다 커야 함)
+      self.RANGES_DIFFERECE_THRESHOLD = 1 #self.DETECT_TWO_EXTRA_CAR에서 좌 우 라이다 차비 비교 THRESHOLD, 튜닝 필요
+      self.MIN_VALID_DISTANCE = 0.01
+      self._front_indices = np.arange(272, 232, -1) # 272‥233 (40)
+      self._left_indices = np.arange(391, 252, -1) # 391‥253 (139)
+      self._right_indices = np.arange(252, 113, -1) # 252‥114 (139)
+      self._both_indices = np.arange(391, 113, -1) # self._left_indices + self._right_indices
+      self._lineEscape_indices = np.arange(283, 221, -1) # 283‥222 (62)
+
+      # 초음파 센서 관련 설정
+      self.SUPER_THRESHOLD = 50 # 초음파 센서 임계값
+
+      # 카메라 노출값 조정
+      self.EXPOSURE = 5
+
+      
+      # lane_change 분기 설정
+      self.dist_min = 0
+      
+      #차선 변경 flag
+      self.flag_change_on = False
+      
+      #상대 속도 추종 THRESHOLD (self.TARGET_DISTANCE 보다 커야 함)
+      self.EXTRA_CAR_DIST_THRESHOLD = 20
+      
+
+    # --------------------------------------------------
+    # 센서 데이터 및 유틸리티 메서드
+    # --------------------------------------------------
+    def get_value(self, image, ranges, ultrasonic):
+        os.system('v4l2-ctl -d /dev/videoCAM -c auto_exposure=0')
+        os.system(f'v4l2-ctl -d /dev/videoCAM -c exposure_time_absolute={self.EXPOSURE}')
+        self._image = image
+        self._ranges = np.array(ranges) if not isinstance(ranges, np.ndarray) else ranges
+        self._ultrasonic = ultrasonic
+
+    def _get_valid_distance(self, ranges_subset):
+        valid_ranges = ranges_subset[ranges_subset > self.MIN_VALID_DISTANCE]
+        return valid_ranges.min() if valid_ranges.size > 0 else np.inf
+
+    def _is_valid_line_coords(self, coords):
+        return coords != (0, 0, 0, 0)
+    
+    def _safe_divide(self, numerator, denominator, default_value=0):
+        if abs(denominator) < 1e-6:
+            return default_value
+        return numerator / denominator
+        
+    def _create_masked_image(self, image, target_lane, width):
+        image_copy = image.copy()
+        if target_lane == self.RETURN_1:
+            image_copy[:, width // 2:] = (0, 0, 0) # 오른쪽 마스킹
+        else:
+            image_copy[:, :width // 2] = (0, 0, 0) # 왼쪽 마스킹
+        return image_copy
+
+    # --------------------------------------------------
+    # 차선 감지 메서드
+    # --------------------------------------------------
+   
+    def filter_lines(self, lines_unfiltered, slope_threshold, is_white):
+      """
+      <gets>
+      lines_unfiltered: HoughlinesP로 감지된 선분들 
+      slope: 차선 가능성 있는 선분들 걸러내기 위한 기울기 threshold
+      <returns>
+      left_lines: 왼쪽 차선 정보를 담은 선분들의 집합
+      right_lines: 오른쪽 차선 정보를 담은 선분들의 집합
+      """
+      # <20250804> '기울기 반대 직선' 거르기 -> 기능 구현 필요
+
+      # Q. 기울기 반대 직선?
+
+      # A. 화면 왼쪽에 인식된 직선은 ('/') 모양이어야 한다 -> ('/') 이 모양은 기울기 (음수), 
+      # 따라서 기울기가 (음수)일 때 두 점의 x1, x2, 좌표가 모두 화면 (오른쪽)에 있을 때의 직선은 걸러내기
+      # *괄호에 대해 Vice versa
+
+      # 왼쪽, 오른쪽 차선 넣어둘 리스트
+      left_lines = []
+      right_lines = []
+
+      if lines_unfiltered is not None:
+        for line in lines_unfiltered:
+          x1, y1, x2, y2 = line[0]
+
+          # 수직선은 제외
+          if x2 - x1 == 0:
+            continue
+          slope = (y2 - y1) / (x2 - x1)
+
+          # 기울기가 작은 직선들은 제외
+          if abs(slope) < slope_threshold:
+            continue
+
+          # 기울기 부호로 좌, 우측 판정
+          # ***< 영상처리 시 Y값의 경우 아래로 갈수록 커진다는 점 유의 >***
+          if slope < 0:
+            # '/' 모양 직선은 화면 왼쪽에만 인식되도록
+            if is_white:
+              if x1 < (self.width_frame // 2) and x2 < (self.width_frame // 2):
+                left_lines.append(line)
+            
+            else:
+              left_lines.append(line)
+          
+          else:
+            # '\' 모양 직선은 화면 오른쪽에만 인식되도록
+            if is_white: 
+              if x1 > (self.width_frame // 2) and x2 > (self.width_frame // 2):
+                right_lines.append(line)
+            
+            else:
+              right_lines.append(line)
+
+      return left_lines, right_lines
+   
+    def region_of_interest(self, img, vertices):
+      '''
+      vertices 범위 밖 값들은 다 0으로 만들어 mask를 씌우는 함수
+      '''
+      mask = np.zeros_like(img)
+      if len(img.shape) > 2:
+      # channel이 여러 개인 경우 (e.g. BGR은 channel 3개)
+        channel_count = img.shape[2]
+        ignore_mask_color = (255,) * channel_count
+      else:
+        ignore_mask_color = 255
+
+      # mask에 vertices 모양대로 ignore_mask_color 값 넣음
+      cv2.fillPoly(mask, [vertices], ignore_mask_color)
+
+      # img, mask에 bitwise_and 연산 해서 겹치지 않는 부분은 0으로
+      masked_image = cv2.bitwise_and(img, mask)
+      
+      # 어케 나오는지 궁금하면 이거 기
+      # cv2.imshow("masked_image", masked_image)
+
+      return masked_image
+        
+    '''
+    메소드 이름: get_best_line
+    입력: lines
+    출력: best_line
+    역할: 여러 line 중 best_line 추출
+    '''
+    def get_best_line(self, lines): 
+        '''
+        입력된 선들 중에서 대푯값 추출
+        gets: [[x1, y1, x2, y2], [x1, y1, x2, y2], ...]
+        returns: [[x1, y1, x2, y2]]
+
+        *** 검증 필요 ***
+        '''
+        best_line = None
+        m_left, b_left = 0.0, 0.0
+        x_sum, y_sum, m_sum = 0.0, 0.0, 0.0
+
+        size = len(lines)
+        if size != 0:
+            for line in lines:
+                x1, y1, x2, y2 = line[0]
+                x_sum += x1 + x2
+                y_sum += y1 + y2
+                if(x2 != x1):
+                    m_sum += float(y2-y1)/float(x2-x1)
+                else:
+                    m_sum += 0
+            
+            x_avg = x_sum / (size*2)
+            y_avg = y_sum / (size*2)
+            m_left = m_sum / size
+            b_left = y_avg- m_left * x_avg
+        
+        if m_left != 0.0:
+            y1 = 0
+            y2 = self.height_frame
+            '''
+            y1, y2 실제 주행 환경에서는 값 맞춰서 바꾸기
+            '''
+
+            x1 = int((y1 - b_left) / m_left)
+            x2 = int((y2 - b_left) / m_left)
+
+            best_line = [[x1, y1, x2, y2]]
+
+        return best_line
+    
+    def line_slope(self, line):
+      """
+      Calculate slope of a line in format [[x1, y1, x2, y2]].
+      Returns float('inf') if the line is vertical.
+      """
+      x1, y1, x2, y2 = line[0]
+      
+      if x2 - x1 == 0: # Vertical line
+          return float('inf')
+      
+      return (y2 - y1) / (x2 - x1)
+          
+    # 이름 바꾸기 => 
+    def detect_yellow_line(self):
+        """
+        이름 바꾸자 -> detect_yellow_line
+        gets: 이미지
+        returns: lines_yellow -> 영상처리 후 허프 변환해서 얻은 선분들의 list
+
+        e.g. 
+        lines_yellow = self.detect_yellow_line()
+
+        if lines_yellow is not None:
+            current_lane = detect_current_lane(lines_yellow)
+        """
+        image = self._image
+
+
+        # RoI(Region of Interest)의 좌표를 나타내는 np.array
+        roi_vertices = np.array([[
+            (self.width_frame * 0, self.height_framet),
+            (self.width_frame * 0.3, self.height_frame * 0.6),
+            (self.width_frame * 0.7, self.height_frame * 0.6),
+            (self.width_frame * 1, self.height_frame)
+        ]], dtype=np.int32)
+
+        # 이미지 hsv 형태로 변환
+        hsv_yellow = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+
+        # 노란색 범위 상, 하한선
+        lower_yellow = np.array([20, 100, 60])
+        upper_yellow = np.array([40, 255, 255])
+
+        mask_yellow = cv2.inRange(hsv_yellow, lower_yellow, upper_yellow)
+        yellow_parts = cv2.bitwise_and(image, image, mask=mask_yellow)
+
+        gray_yellow = cv2.cvtColor(yellow_parts, cv2.COLOR_BGR2GRAY)
+        blur_yellow = cv2.GaussianBlur(gray_yellow, (5, 5), 0)
+        edges_yellow = cv2.Canny(blur_yellow, 50, 150)
+
+        roi_yellow_edges = self.region_of_interest(edges_yellow, roi_vertices)
+
+        lines_yellow = cv2.HoughLinesP(roi_yellow_edges, rho=1, theta=np.pi/180, threshold=50,
+                            minLineLength=35, maxLineGap=5) 
+        
+        return lines_yellow
+    
+
+    def detect_current_lane(self) -> int:
+
+        # <20250812> undoundlacalerror 해결을 위해 선언 추가
+        slope_yellow = 0
+
+        lines_yellow = self.detect_yellow_line
+
+        if lines_yellow is not None:
+            # 노란 선분 정제
+            left_lines_yellow, right_lines_yellow = self.filter_lines(lines_yellow, self.THRESHOLD_SLOPE_YELLOW, is_white = False)
+                
+            # <20250801> 인식된 노란 차선들 중 최고의 선 추출
+            lines_yellow_best = self.get_best_line(left_lines_yellow + right_lines_yellow)
+
+            # <20250801> 노란 차선 반영
+            if lines_yellow_best is not None:
+                    slope_yellow = self.line_slope(lines_yellow_best)
+
+                     # 노란색 차선의 기울기를 계산
+                    if ((slope_yellow) > 0):
+                        self.current_lane = 1
+                        return 1
+                    else:
+                        self.current_lane = 2
+                        return 2
+            # <20250812> 예외처리
+            elif lines_yellow_best is None:
+               return self.current_lane
+
+        else:
+            return self.current_lane
+           
+   
+
+
+    '''
+    메소드 이름: calculate_abc
+    입력: x1,y1,x2,y2
+    출력: 입력받은 x1,y1,x2,y2 값에 해당하는 a, b, c 값 반환 (ax+by+c=0)
+    역할: 직선의 두 점 좌표를 받아서 a,b,c 값으로 변환 (ax+by+c=0)
+    ''' 
+
+    def calculate_abc(self, x1, y1, x2, y2):
+
+        # 좌표로부터 a,b,c 값 추출
+        # ax + by + c = 0
+        a_coef = y1 - y2
+        b_coef = x2 - x1
+        c_coef = x1 * y2 - x2 * y1
+
+        return a_coef, b_coef, c_coef 
+
+    '''
+    메소드 이름: find_yellow
+    입력: image
+    출력: 추출한 노란색 차선의 x1,y1,x2,y2 값
+    역할: 노란색 직선 검출 후 직선 좌표 반환, 일단 동작 확인함
+    '''   
+    def find_yellow(self,image_yellow): 
+        #---------------------------------노란 선 검출-----------------------
+        # 노란 이미지 생성
+        hsv = cv2.cvtColor(image_yellow, cv2.COLOR_BGR2HSV)
+        
+        # 노란색 범위 정의 (Hue: 20~30, Saturation: 100~255, Value: 100~255)
+        lower_yellow = np.array([20, 100, 60])
+        upper_yellow = np.array([40, 255, 255])
+        
+        # 노란색 마스크 생성
+        yellow_mask = cv2.inRange(hsv, lower_yellow, upper_yellow)
+        
+        # 원본 이미지에 마스크 적용하여 노란색만 추출
+        yellow_only = cv2.bitwise_and(image_yellow, image_yellow, mask=yellow_mask)
+        
+        # 노랑 이미지에 GaussianBlur(=정규 분포 양상으로 픽셀 값 깎기, 흐릿하게 만들어서 영상처리에 자주 쓴다)
+        # 노이즈 줄이고 선은 더 선명하게 보이도록
+        yellow_blur = cv2.GaussianBlur((yellow_only), (5, 5), 0)
+        
+        # blur 이미지에 Canny 변환해서 Edge detection
+        yellow_edges = cv2.Canny(yellow_blur, 50, 150)
+
+        # roi_edges에서 직선 인식
+        yellow_lines = cv2.HoughLinesP(yellow_edges, rho=1, theta=np.pi/180, threshold=80,
+                                minLineLength=50, maxLineGap=10)
+
+        if yellow_lines is None: # 차선을 찾지 못하면 0,0,0 반환
+            return 0,0,0,0
+        
+        #----------------------------------노란 선 best line 검출----------------
+        # 왼쪽, 오른쪽 차선 넣어둘 리스트
+        final_yellow_lines = []
+
+        for line in yellow_lines:
+            x1, y1, x2, y2 = line[0] # 직선 좌표 추출
+
+
+            if x1 == x2 and y1 == y2: # 두 점이 같은 점을 가리키면 패스
+                continue
+
+            # ***< 영상처리 시 Y값의 경우 아래로 갈수록 커진다는 점 유의 >***
+        
+            final_yellow_lines.append(line) # final 리스트에 추가
+
+        if final_yellow_lines is None: # final 리스트가 비었다면 0,0,0 반환
+            return 0,0,0,0
+
+        else: #<0812> nonetype 에러처리
+        
+            best_yellow_line = self.get_best_line(final_yellow_lines) # 가장 바람직한 차선 추출
+
+            if final_yellow_lines is None:#<0812> nonetype 에러처리
+                return 0,0,0,0
+            
+            else:
+                x1, y1, x2, y2 = best_yellow_line[0] # 추출한 차선의 좌표 지정
+
+            # 좌표들을 버퍼에 저장
+
+                self.y_x1=x1
+                self.y_x2=x2
+                self.y_y1=y1
+                self.y_y2=y2
+
+        return x1, y1, x2, y2
+
+    '''
+    메소드 이름: find_white
+    입력: image
+    출력: 추출한 흰색 차선의 x1,y1,x2,y2 값
+    역할: 흰색 직선 검출 후 직선 좌표 반환, 일단 동작 확인함
+    ''' 
+    def find_white(self,image_white): # 흰색 직선 검출 후 직선 상수 반환, 일단 동작 확인함
+        
+        #---------------------------------노란 선 검출-----------------------
+        # 하얀 이미지 생성
+        hsv = cv2.cvtColor(image_white, cv2.COLOR_BGR2HSV)
+        
+
+        lower_white = np.array([0, 0, 200])
+        upper_white = np.array([180, 30, 255])
+        
+        # 하얀색 마스크 생성
+        white_mask = cv2.inRange(hsv, lower_white, upper_white)
+        
+        # 원본 이미지에 마스크 적용하여 하얀색만 추출
+        white_only = cv2.bitwise_and(image_white, image_white, mask=white_mask)
+        
+        # 하얀 이미지에 GaussianBlur(=정규 분포 양상으로 픽셀 값 깎기, 흐릿하게 만들어서 영상처리에 자주 쓴다)
+        # 노이즈 줄이고 선은 더 선명하게 보이도록
+        white_blur = cv2.GaussianBlur((white_only), (5, 5), 0)
+        
+        # blur 이미지에 Canny 변환해서 Edge detection
+        white_edges = cv2.Canny(white_blur, 50, 150)
+
+        # roi_edges에서 직선 인식
+        white_lines = cv2.HoughLinesP(white_edges, rho=1, theta=np.pi/180, threshold=80,
+                                minLineLength=50, maxLineGap=10)
+
+        if white_lines is None: # 차선을 찾지 못하면 0,0,0 반환
+            return 0,0,0,0
+
+        #----------------------------------노란 선 best line 검출----------------
+        # 왼쪽, 오른쪽 차선 넣어둘 리스트
+        final_white_lines = []
+
+        for line in white_lines:
+            x1, y1, x2, y2 = line[0] # 직선 좌표 추출
+
+
+            if x1 == x2 and y1 == y2: # 두 점이 같은 점을 가리키면 패스
+                continue
+
+        
+            # ***< 영상처리 시 Y값의 경우 아래로 갈수록 커진다는 점 유의 >***
+        
+            final_white_lines.append(line) # final 리스트에 추가
+
+        if not final_white_lines: # final 리스트가 비었다면 0,0,0 반환
+            return 0,0,0,0
+
+        best_white_line = self.get_best_line(final_white_lines) # 가장 바람직한 차선 추출
+
+        x1, y1, x2, y2 = best_white_line[0] # 추출한 차선의 좌표 지정
+
+        self.w_x1=x1
+        self.w_x2=x2
+        self.w_y1=y1
+        self.w_y2=y2
+
+
+        return x1, y1, x2, y2
+    
+    # --------------------------------------------------
+    # 객체 감지 메서드
+    # --------------------------------------------------
+    
+    '''
+    초음파 센서를 이용하여 측면 차량 감지
+    입력: 초음파 센서 데이터
+    출력: 측면 차량 감지 결과 (크기가 8인 초음파 센서 데이터 배열로 좌측부터 시계방향으로 0, 1, 2, 3, 4, 5, 6, 7 인덱스에 해당하는 값)
+    역할: 초음파 센서를 통해 측면 차량을 감지하고 해당 방향을 반환
+    '''
+    def _detect_sidecar(self):
+        current_lane = self.detect_current_lane()
+        ultrasonic = self._ultrasonic
+
+        if ultrasonic is None:
+            print("Ultrasonic data is not available.") 
+            return False
+        if current_lane == 2:
+          if ultrasonic[0] < self.SUPER_THRESHOLD:
+            print("Right side car detected.")
+            return True
+        elif current_lane == 1:
+          if ultrasonic[4] < self.SUPER_THRESHOLD:
+            print("Left side car detected.")
+            return True
+        
+
+    '''
+    욜로를 이용한 차량 감지
+    입력: 이미지
+    출력: 엑스트라 차향이 감지되고 신뢰도가 일정 이상 높으면 좌표와 크기 정보
+    역할: YOLO 모델을 사용하여 이미지에서 차량을 감지하고 해당 정보를 반환
+    '''
+    def _detect_car(self):
+        if self._image is None: return []
+        detected_boxes = []
+        try:
+            results = model(self._image, verbose=False)
+            for result in results:
+                for box in result.boxes:
+                    confidence = float(box.conf[0])
+                    class_id = int(box.cls[0])
+                    if confidence > self.confidence_threshold and class_id == self.class_names['car']:
+                        x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
+                        detected_boxes.append({'center': [(x1 + x2) / 2, (y1 + y2) / 2],
+                                               'width': x2 - x1, 'height': y2 - y1})
+            return detected_boxes
+        except Exception as e:
+            print(f"Error in _detect_car: {e}")
+            return []
+      
+
+    def _get_yolo_results(self):
+        if self._image is None: return []
+        try:
+            return model(self._image, verbose=False)
+        except Exception as e:
+            print(f"Error in _get_yolo_results: {e}")
+            return []
+
+    def find_closeObstacle_lane(self):
+        yolo_list = self._detect_car()
+        if not yolo_list: return 0
+        closest_car = yolo_list[0]
+        car_center_x, car_center_y = closest_car['center']
+        car_height = closest_car['height']
+        
+        yellow_coords = self.find_yellow(self._image)
+        if not self._is_valid_line_coords(yellow_coords): return 0
+        yellow_a, yellow_b, yellow_c = self.calculate_abc(*yellow_coords)
+        
+        car_bottom_y = car_center_y + car_height / 2
+        yellow_x = self._safe_divide(-yellow_c - yellow_b * car_bottom_y, yellow_a, np.inf)
+
+        if yellow_x > car_center_x: return 1 # 1차선
+        elif yellow_x < car_center_x: return 2 # 2차선
+        else: return 0
+   
+          
+    def _detect_lane_change(self) -> bool:
+        # 차선 변경 유무를 판단하는 로직
+        if len(self._detect_car()) > 0:
+            self.flag_change_on = True
+        else:
+            self.flag_change_on = False
+    # --------------------------------------------------
+    # 주행 제어 로직 메서드 (분리)
+    # --------------------------------------------------
+
+    def _calculate_following_speed(self, lidar_ranges):
+        center = self._ranges[lidar_ranges]
+        self.dist_min = self._get_valid_distance(center)
+        car_pid = self.car_following_pid
+        car_pid['error'] = self.dist_min - self.TARGET_DISTANCE
+        derivative = (car_pid['error'] - car_pid['prev_error'])
+        speed = car_pid['min_Kp'] * car_pid['error'] + car_pid['min_Kd'] * derivative
+        car_pid['prev_error'] = car_pid['error']
+        return max(0, speed)
+
+
+    def _handle_yellow_follow_state(self):
+        yellow_coords = self.find_yellow(self._image)
+        if not self._is_valid_line_coords(yellow_coords): 
+            return 0, False, None
+        
+        a_coef, b_coef, c_coef = self.calculate_abc(*yellow_coords)
+        if a_coef == 0 and b_coef == 0: 
+            return 0, False, None
+
+        lane_pid = self.lane_following_pid
+        x_bottom = self._safe_divide(-(c_coef + b_coef * self.height_frame), a_coef, self.width_frame / 2)
+        position_error = self.width_frame / 2 - x_bottom
+        position_derivative = position_error - lane_pid['prev_error1']
+        
+        slope = self._safe_divide(-a_coef, b_coef)
+        angle_error = 0 - slope
+        angle_derivative = angle_error - lane_pid['prev_error2']
+
+        angle = (lane_pid['Kp'] * position_error + lane_pid['Kd'] * position_derivative +
+                 lane_pid['Kpa'] * angle_error + lane_pid['Kda'] * angle_derivative)
+
+        lane_pid['prev_error1'] = position_error
+        lane_pid['prev_error2'] = angle_error
+        
+        # is_stabilized = abs(position_error) < self.STABILIZATION_POSITION_THRESHOLD and abs(angle_error) < self.STABILIZATION_ANGLE_THRESHOLD
+        
+        return angle #, is_stabilized, None
+
+    def _handle_detect_state(self):
+        obstacle_lane = self.find_closeObstacle_lane()
+        return 0, obstacle_lane, None
+
+    def _handle_lane_return_state(self, target_lane):
+        yellow_coords = self.find_yellow(self._image)
+        white_coords = self.find_white(self._create_masked_image(self._image, target_lane, self.width_frame))
+        
+        if not self._is_valid_line_coords(yellow_coords) or not self._is_valid_line_coords(white_coords):
+            return 0, False, None
+        
+        yellow_a, yellow_b, yellow_c = self.calculate_abc(*yellow_coords)
+        white_a, white_b, white_c = self.calculate_abc(*white_coords)
+        
+        lane_pid = self.lane_changing_pid
+        
+        target_pos = self.width_frame / 2
+        yellow_x = self._safe_divide(-(yellow_c + yellow_b * self.height_frame), yellow_a, self.width_frame / 2)
+        white_x = self._safe_divide(-(white_c + white_b * self.height_frame), white_a, self.width_frame / 2)
+        current_pos = (yellow_x + white_x) / 2
+        
+        error_pos = target_pos - current_pos
+        derivative_pos = error_pos - lane_pid['prev_error']
+
+        yellow_slope = self._safe_divide(-yellow_a, yellow_b)
+        white_slope = self._safe_divide(-white_a, white_b)
+        error_angle = 0 - (yellow_slope + white_slope)
+
+        angle = lane_pid['Kp'] * error_pos + lane_pid['Kd'] * derivative_pos - lane_pid['Ka'] * error_angle
+        lane_pid['prev_error'] = error_pos
+        
+        return angle, None
+
+    def _handle_sidedrive_state(self):
+        # 차선 추종 로직 (yellow_follow와 유사)
+        yellow_coords = self.find_yellow(self._image)
+        angle = 0
+        if self._is_valid_line_coords(yellow_coords):
+            a_coef, b_coef, c_coef = self.calculate_abc(*yellow_coords)
+            if a_coef != 0 or b_coef != 0:
+                lane_pid = self.lane_following_pid # 여기서는 일반 차선 추종 PID 사용
+                x_bottom = self._safe_divide(-(c_coef + b_coef * self.height_frame), a_coef, self.width_frame / 2)
+                position_error = self.width / 2 - x_bottom
+                angle = lane_pid['Kp'] * position_error # 간단한 P 제어만 사용
+
+        return angle
+
+    def _debug_visualization(self, image, results):
+        if not results: return
+        image_with_boxes = image.copy()
+        for result in results:
+            for box in result.boxes:
+                x1, y1, x2, y2 = map(int, box.xyxy[0])
+                label = model.names[int(box.cls[0])]
+                cv2.rectangle(image_with_boxes, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                cv2.putText(image_with_boxes, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+        
+        if self.y_x1 != 0 or self.y_x2 != 0:
+            cv2.line(image_with_boxes, (self.y_x1, self.y_y1), (self.y_x2, self.y_y2), (0, 255, 0), 2)
+        # if self.w_x1 != 0 or self.w_x2 != 0:
+        #     cv2.line(image_with_boxes, (self.w_x1, self.w_y1), (self.w_x2, self.w_y2), (0, 255, 0), 2)
+        
+        cv2.imshow("YOLO Result", image_with_boxes)
+        
+
+    # --------------------------------------------------
+    # 메인 실행 메서드
+    # --------------------------------------------------
+    def change_lane(self):
+        self.yolo_list = self._detect_car()
+        self.results = self._get_yolo_results()
+        extra_car_detected = len(self._detect_car())
+        angle = 0
+        
+        current_state = self.state
+        #-------------------------------INIT state-----------------------
+        if self.state == self.INIT:
+          #전방 레이더 값 받아오기
+          center = self._ranges[self._front_indices]
+          dist_min = self._get_valid_distance(center)
+          
+          #현재 차량 위치
+          current_lane = self.detect_current_lane()
+          #extra 차량 위치
+          extra_car_lane = self.find_closeObstacle_lane()
+          #side 차량 존재 여부
+          side_car_detected = self._detect_sidecar()
+          
+
+          # 차량 2개 인식, 챠량 1개 인식하는 감지 함수 만들 예정
+          if side_car_detected == True:
+            self.state = self.INIT
+          else: 
+            #extra car 2개 검출
+            if (extra_car_detected >= 2):
+              self.state = self.DETECT_TWO_EXTRA_CAR
+              print("more then 2 car detected. move to DETECT_TWO_EXTRA_CAR state")
+            #extra car 1개 검출
+            elif (extra_car_detected == 1):
+              if(extra_car_lane == current_lane):
+                self.state = self.DETECT_ONE_EXTRA_CAR
+                print("1 car detected at the same lane. move to DETECT_TWO_EXTRA_CAR state")
+              else:
+                self.state = self.INIT
+                print("1 car detected at the different lane. move to DETECT_TWO_EXTRA_CAR state")
+            #extra car 검출 X 
+            elif (extra_car_detected == 0):
+              self.state = self.INIT
+              print("no car detected. stay at INIT state")
+  
+          if (dist_min < self.EXTRA_CAR_DIST_THRESHOLD): #self.TARGET_DISTANCE < self.EXTRA_CAR_DIST_THRESHOLD이어야 함
+            pass
+            
+      #--------------------------2개 인식 스테이트--------------------------
+          
+        elif self.state == self.DETECT_TWO_EXTRA_CAR:
+    
+          # 좌우 라이다 부채꼴 값 받아오기
+          ranges_left = self._ranges[self._left_indices]
+          ranges_right = self._ranges[self._right_indices]
+
+          # 좌우 라이다 최소 값 받아오기
+          min_ranges_left = self._get_valid_distance(ranges_left)
+          min_ranges_right = self._get_valid_distance(ranges_right)
+          
+          
+            # 중앙선 위에 올라온 상황으로 확보할 수 있도록 self.차이_유의미_THRESHOLD 튜닝
+          if (abs(min_ranges_left - min_ranges_right) > self.RANGES_DIFFERECE_THRESHOLD):
+              
+              # 차선 변경 대상 차로 확보 -> 1개 인식 스테이트에서 실질적 추월 수행
+              self.state = self.DETECT_ONE_EXTRA_CAR
+          
+          else:
+            angle = self._handle_yellow_follow_state() #중앙선 추종
+            speed = self._calculate_following_speed(self._both_indices)
+          
+      #--------------------------1개 인식 스테이트------------------------------
+         # 1개 인식 스테이트는 '내 차선'에 해당 차량이 있을 때만 state가 여기로 넘어오는 걸로 상정
+          # INIT 함수에서 차 개수 셀 때 걸러주도록 구현 의도
+        elif self.state == self.DETECT_ONE_EXTRA_CAR:
+
+          # 전방 레이더 값 받아오기
+          ranges_escape_dist = self._ranges[self._lineEscape_indices]
+          min_ranges_front = self._get_valid_distance(ranges_escape_dist)
+
+          # closeObstacle_lane 값에 따라 차선 변경 방향 결정
+          # 1: 오른쪽 차선, 2: 왼쪽 차선, 나머지는 에러..? 다시 탐색 필요
+          if self.detect_current_lane() == 1:
+              self.to_the_right = True 
+          elif self.detect_current_lane() == 2:
+              self.to_the_right = False
+          else:
+              print("ERROR! can't detect my current lane.")
+
+
+          # 스테이트 분기 (탈출) 지점
+          if (min_ranges_front > self.ESCAPE_DIST_THRESHOLD):
+              # 다시 INIT으로 돌아가서 
+              self.state = self.INIT
+
+          # 오른쪽으로 차선 변경
+          if self.to_the_right:
+              # speed 오프셋은 추월 목적
+              print("move to right")
+          # 왼쪽으로 차선 변경
+          else:
+              # speed 오프셋은 추월 목적
+              print("move to left")
+        
+        return angle, speed
+
+    def step(self):
+
+        # follow_lane 상태에서만 디텍터를 통해 차선 변경 flag 설정
+        # if not self.flag_change_on:
+        #     self.flag_change_on = self._detect_lane_change()
+        #     self._debug_visualization(self._image, self.results)
+        #     print(f"current lane: {self.detect_current_lane()}")
+        #     print(f"state : {self.state}")
+        '''
+        if self.flag_change_on:
+            angle, speed = self.change_lane()    
+        else:
+            angle, speed = self.follow_lane()
+        '''
+        
+        
+        print('p')
+
+
+        image_sample = self._image
+        x1,y1,x2,y2 = self.find_yellow(image_sample)
+        
+        self.yolo_list = self._detect_car()
+        self.results = self._get_yolo_results()
+        angle = self._handle_yellow_follow_state()
+        speed = 0
+        self._debug_visualization(image_sample, self.results)
+
+        print(x1,x2,y1,y2)
+        
+        
+        return angle, speed
